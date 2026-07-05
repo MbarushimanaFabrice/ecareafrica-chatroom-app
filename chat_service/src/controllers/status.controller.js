@@ -1,17 +1,18 @@
-const { queryEca } = require('../db/ecafrica_pool');
 const { logger } = require('../utils/logger');
+
+// In-memory presence store — keyed by userId
+// { userId: { school_id, is_online, last_seen_at } }
+const presenceMap = new Map();
 
 // ── PUT /chat/status/heartbeat ────────────────────────────────────────────────
 async function heartbeat(req, res) {
   try {
     const { sub: userId, school_id: schoolId } = req.user;
-    await queryEca(
-      `INSERT INTO chatroom_active_status (user_id, school_id, is_online, last_seen_at)
-       VALUES ($1,$2,TRUE,NOW())
-       ON CONFLICT (user_id) DO UPDATE
-       SET is_online = TRUE, last_seen_at = NOW(), updated_at = NOW()`,
-      [userId, schoolId]
-    );
+    presenceMap.set(userId, {
+      school_id:    schoolId,
+      is_online:    true,
+      last_seen_at: new Date().toISOString(),
+    });
     res.json({ success: true });
   } catch (err) {
     logger.error('heartbeat error:', err);
@@ -19,22 +20,15 @@ async function heartbeat(req, res) {
   }
 }
 
-// ── GET /chat/status/:userId ──────────────────────────────────────────────────
+// ── GET /chat/status/:userId ──────────────────────────────────���───────────────
 async function getUserStatus(req, res) {
   try {
-    const { school_id: schoolId } = req.user;
     const { userId } = req.params;
-    const result = await queryEca(
-      `SELECT is_online, last_seen_at
-       FROM   chatroom_active_status
-       WHERE  user_id = $1 AND school_id = $2`,
-      [userId, schoolId]
-    );
-    if (result.rows.length === 0) {
+    const entry = presenceMap.get(userId);
+    if (!entry) {
       return res.json({ data: { is_online: false, last_seen_at: null } });
     }
-    const { is_online, last_seen_at } = result.rows[0];
-    res.json({ data: { is_online, last_seen_at } });
+    res.json({ data: { is_online: entry.is_online, last_seen_at: entry.last_seen_at } });
   } catch (err) {
     logger.error('getUserStatus error:', err);
     res.status(500).json({ error: 'SERVER_ERROR' });

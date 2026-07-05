@@ -2,11 +2,7 @@
  * Creates the chatroom schema inside ECareAfrica_db.
  * Run once:  node src/db/migrate.js
  *
- * ONE table  →  chatRoom_history   (all messages, threads, delivery status,
- *                                   broadcast info, SMS audit)
- * TWO helper →  chatroom_active_status  (online/offline heartbeat)
- *               chatroom_device_tokens  (FCM push-notification tokens)
- *
+ * Adds ONE table: chatRoom_history
  * No existing ECareAfrica_db tables are altered.
  */
 require('dotenv').config();
@@ -15,10 +11,9 @@ const { logger } = require('../utils/logger');
 
 const migrations = [
 
-  // ─── 1. chatRoom_history ─────────────────────────────────────────────────────
-  // One row = one message event.
+  // chatRoom_history — one row per message event.
   // Thread context (who/what conversation) is stored on every row so
-  // the full history can be read from this table alone — no JOINs needed.
+  // the full history can be queried from this table alone — no JOINs needed.
   `CREATE TABLE IF NOT EXISTS "chatRoom_history" (
 
     -- Identity
@@ -79,13 +74,11 @@ const migrations = [
     sms_sent_at       TIMESTAMPTZ,
     sms_provider_ref  TEXT,
 
-    -- Audit timestamps
+    -- Timestamps
     sent_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
 
-    -- Every real message must have content or a media file;
-    -- system messages (type='system') are exempt.
     CONSTRAINT chk_content_or_media CHECK (
       content IS NOT NULL
       OR media_url IS NOT NULL
@@ -93,11 +86,16 @@ const migrations = [
     )
   )`,
 
-  // Primary read path: all messages in a thread, newest first
+  // Ensures only one system/anchor row per thread (idempotent thread creation)
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_crh_thread_anchor
+     ON "chatRoom_history" (thread_id)
+     WHERE message_type = 'system'`,
+
+  // Primary read path: all messages in a thread, oldest first
   `CREATE INDEX IF NOT EXISTS idx_crh_thread_sent
      ON "chatRoom_history" (thread_id, sent_at DESC)`,
 
-  // Thread list per teacher (most common query — teacher home screen)
+  // Thread list per teacher
   `CREATE INDEX IF NOT EXISTS idx_crh_teacher_school
      ON "chatRoom_history" (teacher_id, school_id, sent_at DESC)`,
 
@@ -114,7 +112,7 @@ const migrations = [
      ON "chatRoom_history" (recipient_id, status)
      WHERE is_deleted = FALSE AND message_type != 'system'`,
 
-  // School-level reporting / compliance queries
+  // School-level reporting
   `CREATE INDEX IF NOT EXISTS idx_crh_school
      ON "chatRoom_history" (school_id, sent_at DESC)`,
 
@@ -122,43 +120,6 @@ const migrations = [
   `CREATE INDEX IF NOT EXISTS idx_crh_fts
      ON "chatRoom_history"
      USING GIN (to_tsvector('english', COALESCE(content, '')))`,
-
-  // Ensures only one system/anchor row per thread (idempotent thread creation)
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_crh_thread_anchor
-     ON "chatRoom_history" (thread_id)
-     WHERE message_type = 'system'`,
-
-  // ─── 2. chatroom_active_status ────────────────────────────────────────────────
-  // Online/offline presence — one row per user, upserted on heartbeat.
-  `CREATE TABLE IF NOT EXISTS chatroom_active_status (
-    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id      UUID        NOT NULL UNIQUE,
-    school_id    UUID        NOT NULL,
-    is_online    BOOLEAN     NOT NULL DEFAULT FALSE,
-    last_seen_at TIMESTAMPTZ,
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  )`,
-
-  `CREATE INDEX IF NOT EXISTS idx_cas_user
-     ON chatroom_active_status (user_id)`,
-
-  // ─── 3. chatroom_device_tokens ────────────────────────────────────────────────
-  // FCM / APNs tokens for push notifications.
-  `CREATE TABLE IF NOT EXISTS chatroom_device_tokens (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id         UUID        NOT NULL,
-    school_id       UUID        NOT NULL,
-    user_role       VARCHAR(20) NOT NULL
-                    CHECK (user_role IN ('teacher','parent','student')),
-    device_token    TEXT        NOT NULL,
-    device_platform VARCHAR(10) NOT NULL
-                    CHECK (device_platform IN ('android','ios')),
-    is_active       BOOLEAN     NOT NULL DEFAULT TRUE,
-    last_used_at    TIMESTAMPTZ,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (user_id, device_token)
-  )`,
 ];
 
 async function migrate() {
@@ -170,7 +131,7 @@ async function migrate() {
       await client.query(sql);
     }
     logger.info(`✅ ${migrations.length} statements applied.`);
-    logger.info('   Tables: chatRoom_history, chatroom_active_status, chatroom_device_tokens');
+    logger.info('   Table added: chatRoom_history');
   } catch (err) {
     logger.error('Migration failed:', err.message);
     throw err;

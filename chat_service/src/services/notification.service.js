@@ -1,42 +1,31 @@
-const { queryEca } = require('../db/ecafrica_pool');
 const { sendFcmToToken } = require('./firebase.service');
 const { logger } = require('../utils/logger');
 
+// In-memory device token store — keyed by userId
+// { userId: [{ token, platform }] }
+const tokenMap = new Map();
+
 /**
- * Send a push notification to all active device tokens for a user.
- * Automatically purges expired / invalid tokens.
+ * Send a push notification to all registered tokens for a user.
  */
-async function sendPushNotification(userId, schoolId, { title, body, data = {} }) {
+async function sendPushNotification(userId, _schoolId, { title, body, data = {} }) {
   try {
-    const tokensRes = await queryEca(
-      `SELECT id, device_token FROM chatroom_device_tokens
-       WHERE user_id = $1 AND school_id = $2 AND is_active = TRUE`,
-      [userId, schoolId]
-    );
-    if (tokensRes.rows.length === 0) {
+    const tokens = tokenMap.get(userId) || [];
+    if (tokens.length === 0) {
       logger.debug(`No device tokens for user ${userId}`);
       return;
     }
 
-    const expiredIds = [];
-    for (const row of tokensRes.rows) {
-      const result = await sendFcmToToken(row.device_token, title, body, data);
-      if (result.expired) {
-        expiredIds.push(row.id);
-      } else {
-        await queryEca(
-          `UPDATE chatroom_device_tokens SET last_used_at = NOW() WHERE id = $1`,
-          [row.id]
-        );
-      }
+    const expired = [];
+    for (const entry of tokens) {
+      const result = await sendFcmToToken(entry.token, title, body, data);
+      if (result.expired) expired.push(entry.token);
     }
 
-    if (expiredIds.length > 0) {
-      await queryEca(
-        `UPDATE chatroom_device_tokens SET is_active = FALSE WHERE id = ANY($1)`,
-        [expiredIds]
-      );
-      logger.info(`Purged ${expiredIds.length} expired FCM tokens for user ${userId}`);
+    if (expired.length > 0) {
+      const active = (tokenMap.get(userId) || []).filter(e => !expired.includes(e.token));
+      tokenMap.set(userId, active);
+      logger.info(`Removed ${expired.length} expired FCM tokens for user ${userId}`);
     }
   } catch (err) {
     logger.error(`sendPushNotification failed for user ${userId}:`, err);
@@ -45,17 +34,14 @@ async function sendPushNotification(userId, schoolId, { title, body, data = {} }
 
 /**
  * Register or refresh a device token for a user.
- * Called by the Flutter app on session start.
+ * Called by the Flutter app on session start via POST /chat/device-token.
  */
-async function registerDeviceToken(userId, schoolId, userRole, deviceToken, platform) {
-  await queryEca(
-    `INSERT INTO chatroom_device_tokens
-       (user_id, school_id, user_role, device_token, device_platform, last_used_at)
-     VALUES ($1,$2,$3,$4,$5,NOW())
-     ON CONFLICT (user_id, device_token) DO UPDATE
-     SET is_active = TRUE, last_used_at = NOW(), updated_at = NOW()`,
-    [userId, schoolId, userRole, deviceToken, platform]
-  );
+async function registerDeviceToken(userId, _schoolId, _userRole, deviceToken, platform) {
+  const existing = tokenMap.get(userId) || [];
+  const filtered = existing.filter(e => e.token !== deviceToken);
+  filtered.push({ token: deviceToken, platform });
+  tokenMap.set(userId, filtered);
+  logger.debug(`Registered device token for user ${userId} (${platform})`);
 }
 
 module.exports = { sendPushNotification, registerDeviceToken };
