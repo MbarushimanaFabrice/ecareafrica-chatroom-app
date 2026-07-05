@@ -33,7 +33,7 @@ The ECareAfrica Chatroom is a **fully independent feature module** that adds rea
 |------|--------|
 | Flutter package | `chatroom_package` — self-contained; host app passes a JWT |
 | Backend | Node.js REST API (Express) — `chat_service/` — port 3000 |
-| Database | **ECareAfrica_db** — shared with the main system; chatroom adds 3 tables |
+| Database | **ECareAfrica_db** — shared with the main system; chatroom adds **1 table** (`chatRoom_history`) |
 | Real-time | Firebase Realtime Database (event signals only — no message content stored) |
 | Push | Firebase Cloud Messaging (FCM) |
 | SMS | OTP delivery via configured SMS gateway |
@@ -78,9 +78,7 @@ The ECareAfrica Chatroom is a **fully independent feature module** that adds rea
 │             ▼               │   ┌────────────────────────────────┐
 │   ECareAfrica_db             │──▶│  SMS Gateway                   │
 │   (PostgreSQL)               │   │  OTP delivery                  │
-│   chatRoom_history           │   └────────────────────────────────┘
-│   chatroom_active_status     │
-│   chatroom_device_tokens     │
+│   chatRoom_history (1 table) │   └────────────────────────────────┘
 └────────────────────────────┘
 ```
 
@@ -130,7 +128,7 @@ ChatRoom/
 │   │   ├── server.js              ← Express bootstrap, connects to ECareAfrica_db
 │   │   ├── db/
 │   │   │   ├── ecafrica_pool.js   ← Single PostgreSQL pool for ECareAfrica_db
-│   │   │   └── migrate.js         ← Creates chatRoom_history + 2 helper tables
+│   │   │   └── migrate.js         ← Creates chatRoom_history (1 table only)
 │   │   ├── middleware/
 │   │   │   └── auth.middleware.js ← JWT validation, requireRole guard
 │   │   ├── routes/
@@ -305,7 +303,7 @@ ALLOWED_ORIGINS=http://localhost:3000,https://your-production-domain.com
 
 ### Step 3 — Run database migrations
 
-This creates `chatRoom_history`, `chatroom_active_status`, and `chatroom_device_tokens` in ECareAfrica_db. **No existing tables are altered.**
+This creates `chatRoom_history` in ECareAfrica_db. **No existing tables are altered.**
 
 ```bash
 npm run migrate
@@ -347,9 +345,11 @@ Health check: `GET http://localhost:3000/health`
 
 ## 7. Database Setup
 
-### ECareAfrica_db — tables created by migration
+### ECareAfrica_db — table created by migration
 
-The chatroom adds **3 tables** to the existing ECareAfrica_db. All other tables (users, students, schools, sections, etc.) are read-only from the chatroom's perspective.
+The chatroom adds **1 table** to the existing ECareAfrica_db. All other tables (users, students, schools, sections, etc.) are read-only from the chatroom's perspective.
+
+Online presence and FCM device tokens are handled **in memory** — no extra tables needed.
 
 #### `chatRoom_history` — the single chat table
 
@@ -423,40 +423,9 @@ CREATE INDEX idx_crh_recipient_status     ON "chatRoom_history" (recipient_id, s
 CREATE INDEX idx_crh_fts                  ON "chatRoom_history" USING GIN (to_tsvector('english', COALESCE(content, '')));
 ```
 
-#### `chatroom_active_status` — online presence
+#### Presence and device tokens
 
-One row per user, upserted on every heartbeat call (every 30 s from Flutter).
-
-```sql
-CREATE TABLE IF NOT EXISTS chatroom_active_status (
-  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id      UUID        NOT NULL UNIQUE,
-  school_id    UUID        NOT NULL,
-  is_online    BOOLEAN     NOT NULL DEFAULT FALSE,
-  last_seen_at TIMESTAMPTZ,
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-```
-
-#### `chatroom_device_tokens` — FCM push tokens
-
-Stores Android/iOS device tokens for push notification delivery.
-
-```sql
-CREATE TABLE IF NOT EXISTS chatroom_device_tokens (
-  id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id         UUID        NOT NULL,
-  school_id       UUID        NOT NULL,
-  user_role       VARCHAR(20) NOT NULL,
-  device_token    TEXT        NOT NULL,
-  device_platform VARCHAR(10) NOT NULL,   -- 'android' | 'ios'
-  is_active       BOOLEAN     NOT NULL DEFAULT TRUE,
-  last_used_at    TIMESTAMPTZ,
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (user_id, device_token)
-);
-```
+Online/offline presence and FCM device tokens are stored **in memory** (Node.js `Map`) — no database tables required. They are re-populated on each server start as users reconnect.
 
 ---
 
