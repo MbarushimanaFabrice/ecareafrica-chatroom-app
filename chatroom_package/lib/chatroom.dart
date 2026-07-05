@@ -15,3 +15,7 @@ export 'src/models/chat_message.dart';
 
 // Theme
 export 'src/theme/app_theme.dart';
+
+// Entry screens
+export 'src/screens/launch_screen.dart';
+export 'src/screens/auth/teacher_parent_login_screen.dart';

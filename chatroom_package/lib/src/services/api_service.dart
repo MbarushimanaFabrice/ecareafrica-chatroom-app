@@ -139,8 +139,11 @@ class ApiService {
       _dio.post('/chat/device-token',
           data: {'device_token': deviceToken, 'device_platform': platform});
 
-  // ── Dev / test token (development only) ───────────────────────────────────
+  // ── Teacher / Parent authentication ──────────────────────────────────────
 
-  static Future<Response> getTestToken(Map<String, dynamic> body) =>
-      _dio.post('/dev/auth/test-token', data: body);
+  static Future<Response> login(String phone, String password) =>
+      _dio.post('/auth/login', data: {'phone': phone, 'password': password});
+
+  static Future<Response> verifyOtp(String phone, String otp) =>
+      _dio.post('/auth/verify-otp', data: {'phone': phone, 'otp': otp});
 }

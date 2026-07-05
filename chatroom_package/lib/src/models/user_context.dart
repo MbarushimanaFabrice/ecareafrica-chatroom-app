@@ -1,5 +1,42 @@
 /// User context models — mirrors the user-context bridge API response.
 
+class TeacherStudentInfo {
+  final String studentId;
+  final String fullName;
+  final String admissionNumber;
+  final String sectionId;
+  final String section;
+  final String? parentName;
+  final String? parentPhone;
+  final String? parentUserId;
+  final List<String> subjects;
+
+  const TeacherStudentInfo({
+    required this.studentId,
+    required this.fullName,
+    required this.admissionNumber,
+    required this.sectionId,
+    required this.section,
+    this.parentName,
+    this.parentPhone,
+    this.parentUserId,
+    this.subjects = const [],
+  });
+
+  factory TeacherStudentInfo.fromJson(Map<String, dynamic> json) =>
+      TeacherStudentInfo(
+        studentId:        json['student_id'] as String,
+        fullName:         json['full_name'] as String,
+        admissionNumber:  json['admission_number'] as String? ?? '',
+        sectionId:        json['section_id'] as String? ?? '',
+        section:          json['section'] as String? ?? '',
+        parentName:       json['parent_name'] as String?,
+        parentPhone:      json['parent_phone'] as String?,
+        parentUserId:     json['parent_user_id'] as String?,
+        subjects:         List<String>.from(json['subjects'] as List? ?? []),
+      );
+}
+
 class TeacherContact {
   final String teacherId;
   final String userId;
@@ -104,6 +141,7 @@ class UserContext {
   // Teacher-specific
   final List<String> subjects;
   final List<Map<String, dynamic>> classes;
+  final List<TeacherStudentInfo> students;
 
   // Student-specific
   final String? studentId;
@@ -120,6 +158,7 @@ class UserContext {
     this.children = const [],
     this.subjects = const [],
     this.classes = const [],
+    this.students = const [],
     this.studentId,
     this.admissionNumber,
     this.classId,
@@ -137,6 +176,9 @@ class UserContext {
         .toList(),
     subjects: List<String>.from(json['subjects'] as List? ?? []),
     classes: List<Map<String, dynamic>>.from(json['classes'] as List? ?? []),
+    students: (json['students'] as List? ?? [])
+        .map((s) => TeacherStudentInfo.fromJson(s as Map<String, dynamic>))
+        .toList(),
     studentId: json['student_id'] as String?,
     admissionNumber: json['admission_number'] as String?,
     classId: json['class_id'] as String?,

@@ -1,45 +1,143 @@
-const jwt = require('jsonwebtoken');
-const path = require('path');
-const fs = require('fs');
-const { query } = require('../db/pool');
-const { getUserContext } = require('../services/user_context.service');
+const jwt    = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const { queryEca } = require('../db/ecafrica_pool');
 const { sendSmsRaw } = require('../services/sms.service');
 const { logger } = require('../utils/logger');
 
-// In-memory OTP store (use Redis in production)
-const otpStore = new Map(); // key: studentId → { otp, expiresAt, parentPhone }
+// In-memory OTP store — keyed by phone (teacher/parent) or student_id_number (student)
+const otpStore = new Map();
 
 function generateOtp() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-function getMockStudentRecord(student_id) {
-  const mockDir = path.join(__dirname, '../../mock-data');
-  const files = fs.readdirSync(mockDir).filter(f => f.includes('student'));
+function storeOtp(key, payload) {
+  const expiresAt = Date.now() + parseInt(process.env.OTP_EXPIRES_MINUTES || '10') * 60 * 1000;
+  otpStore.set(key, { ...payload, expiresAt });
+}
 
-  for (const file of files) {
-    const data = JSON.parse(fs.readFileSync(path.join(mockDir, file), 'utf8'));
-    if (data.student_id === student_id || data.user_id === student_id) {
-      return {
-        student_id: data.student_id || data.user_id,
-        full_name: data.full_name,
-        school_id: data.school_id,
-        class_id: data.class_id,
-        section: data.section,
-        parent_phone: data.parent_phone,
-      };
-    }
+function consumeOtp(key, otp) {
+  const stored = otpStore.get(key);
+  if (!stored) return { ok: false, reason: 'NO_OTP' };
+  if (Date.now() > stored.expiresAt) {
+    otpStore.delete(key);
+    return { ok: false, reason: 'EXPIRED' };
   }
+  if (stored.otp !== otp.trim()) return { ok: false, reason: 'WRONG' };
+  otpStore.delete(key);
+  return { ok: true, stored };
+}
 
-  // Fallback with proper UUIDs
-  return {
-    student_id,
-    full_name: 'Test Student',
-    school_id: '00000000-0000-0000-0000-000000000001',
-    class_id: '00000000-0000-0000-0004-000000000001',
-    section: 'A',
-    parent_phone: '+250700000000',
-  };
+// ── POST /auth/login  (teacher or parent) ────────────────────────────────────
+async function login(req, res) {
+  try {
+    const { phone, password } = req.body;
+    if (!phone || !password) {
+      return res.status(400).json({
+        error: 'INVALID_REQUEST',
+        message: 'phone and password are required.',
+      });
+    }
+
+    const result = await queryEca(
+      `SELECT u.id, u.uuid, u.school_id, u.name, u.phone, u.password_hash, u.role, u.status,
+              s.uuid AS school_uuid
+       FROM   users u
+       JOIN   schools s ON s.id = u.school_id
+       WHERE  u.phone = $1
+         AND  u.role IN ('teacher','parent','school_admin')
+         AND  u.deleted_at IS NULL
+       LIMIT 1`,
+      [phone.trim()]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({
+        error: 'INVALID_CREDENTIALS',
+        message: 'Phone number not found or not registered as teacher/parent.',
+      });
+    }
+
+    const user = result.rows[0];
+
+    if (user.status !== 'active') {
+      return res.status(401).json({
+        error: 'ACCOUNT_INACTIVE',
+        message: 'Your account is inactive. Contact your school admin.',
+      });
+    }
+
+    const passwordMatch = await bcrypt.compare(password, user.password_hash);
+    if (!passwordMatch) {
+      return res.status(401).json({
+        error: 'INVALID_CREDENTIALS',
+        message: 'Incorrect password.',
+      });
+    }
+
+    const otp = generateOtp();
+    storeOtp(phone.trim(), { otp, user });
+
+    if (process.env.NODE_ENV !== 'production') {
+      logger.info(`[DEV] OTP for ${phone}: ${otp}`);
+    }
+
+    const smsBody = `Your ECA Chatroom OTP is: ${otp}. Valid for ${process.env.OTP_EXPIRES_MINUTES || 10} minutes.`;
+    try {
+      await sendSmsRaw(user.phone, smsBody);
+      logger.info(`OTP sent to ${user.role} ${user.uuid} (${phone.slice(0, 6)}****)`);
+    } catch (smsErr) {
+      logger.warn(`SMS delivery failed for ${phone.slice(0, 6)}****: ${smsErr.message}`);
+    }
+
+    res.json({ success: true, message: 'OTP sent to your registered phone number.' });
+  } catch (err) {
+    logger.error('login error:', err);
+    res.status(500).json({ error: 'SERVER_ERROR' });
+  }
+}
+
+// ── POST /auth/verify-otp  (teacher or parent) ───────────────────────────────
+async function verifyOtp(req, res) {
+  try {
+    const { phone, otp } = req.body;
+    if (!phone || !otp) {
+      return res.status(400).json({
+        error: 'INVALID_REQUEST',
+        message: 'phone and otp are required.',
+      });
+    }
+
+    const { ok, reason, stored } = consumeOtp(phone.trim(), otp);
+
+    if (!ok) {
+      const messages = {
+        NO_OTP:  'No OTP found. Please request a new one.',
+        EXPIRED: 'OTP has expired. Please request a new one.',
+        WRONG:   'Incorrect OTP. Please try again.',
+      };
+      return res.status(401).json({ error: 'OTP_INVALID', message: messages[reason] });
+    }
+
+    const { user } = stored;
+    const payload = {
+      sub:       user.uuid.trim(),
+      user_id:   user.uuid.trim(),
+      school_id: user.school_uuid.trim(),
+      role:      user.role,
+      name:      user.name,
+    };
+
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
+      expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+    });
+
+    logger.info(`JWT issued for ${user.role} ${user.uuid}`);
+    res.json({ token, role: user.role, name: user.name });
+  } catch (err) {
+    logger.error('verifyOtp error:', err);
+    res.status(500).json({ error: 'SERVER_ERROR' });
+  }
 }
 
 // ── POST /auth/student/request-otp ───────────────────────────────────────────
@@ -49,61 +147,52 @@ async function requestStudentOtp(req, res) {
     if (!student_id) {
       return res.status(400).json({
         error: 'INVALID_REQUEST',
-        message: 'student_id is required.',
+        message: 'student_id (roll number) is required.',
       });
     }
 
-    let parentPhone;
-    let studentRecord;
+    const result = await queryEca(
+      `SELECT s.id, s.uuid, s.school_id,
+              s.first_name || ' ' || s.last_name AS full_name,
+              s.student_id_number,
+              pg.phone AS parent_phone,
+              sc.uuid  AS school_uuid
+       FROM   students s
+       JOIN   student_parent_links spl ON spl.student_id = s.id AND spl.is_primary = true
+       JOIN   parents_guardians pg     ON pg.id = spl.parent_id
+       JOIN   schools sc               ON sc.id = s.school_id
+       WHERE  s.student_id_number = $1
+         AND  s.status = 'active'
+         AND  s.deleted_at IS NULL
+       LIMIT 1`,
+      [student_id.trim()]
+    );
 
-    if (process.env.USE_MOCK_BRIDGE === 'true') {
-      studentRecord = getMockStudentRecord(student_id);
-      parentPhone = studentRecord.parent_phone;
-    } else {
-      try {
-        const axios = require('axios');
-        const res2 = await axios.get(
-          `${process.env.MAIN_API_BASE_URL}/api/internal/student-auth`,
-          {
-            params: { admission_number: student_id },
-            headers: { 'X-Chat-Service-Key': process.env.CHAT_SERVICE_KEY },
-            timeout: 5000,
-          }
-        );
-        studentRecord = res2.data;
-        parentPhone = studentRecord.parent_phone;
-      } catch (err) {
-        if (err.response?.status === 404) {
-          return res.status(404).json({
-            error: 'STUDENT_NOT_FOUND',
-            message: 'Student ID not found.',
-          });
-        }
-        throw err;
-      }
-    }
-
-    if (!parentPhone) {
+    if (result.rows.length === 0) {
       return res.status(404).json({
-        error: 'PARENT_PHONE_MISSING',
-        message: 'No OTP can be sent — parent phone not on record. Contact school admin.',
+        error: 'STUDENT_NOT_FOUND',
+        message: 'Roll number not found or no primary parent on record.',
       });
     }
+
+    const student = result.rows[0];
 
     const otp = generateOtp();
-    const expiresAt = Date.now() + parseInt(process.env.OTP_EXPIRES_MINUTES || '10') * 60 * 1000;
+    storeOtp(student_id.trim(), { otp, student });
 
-    otpStore.set(student_id, { otp, expiresAt, parentPhone, studentRecord });
+    if (process.env.NODE_ENV !== 'production') {
+      logger.info(`[DEV] Student OTP for ${student_id}: ${otp}`);
+    }
 
-    const smsBody = `Your student ${studentRecord.full_name} is logging into Netrack. OTP: ${otp}. Valid for 10 minutes.`;
-    await sendSmsRaw(parentPhone, smsBody);
+    const smsBody = `${student.full_name} is logging into ECA Chatroom. OTP: ${otp}. Valid for ${process.env.OTP_EXPIRES_MINUTES || 10} minutes.`;
+    try {
+      await sendSmsRaw(student.parent_phone, smsBody);
+      logger.info(`Student OTP sent for ${student_id} to parent ${student.parent_phone.slice(0, 6)}****`);
+    } catch (smsErr) {
+      logger.warn(`SMS delivery failed for ${student_id}: ${smsErr.message}`);
+    }
 
-    logger.info(`OTP sent for student ${student_id} to ${parentPhone.slice(0, 6)}****`);
-
-    res.json({
-      success: true,
-      message: 'OTP sent to parent phone.',
-    });
+    res.json({ success: true, message: 'OTP sent to parent phone.' });
   } catch (err) {
     logger.error('requestStudentOtp error:', err);
     res.status(500).json({ error: 'SERVER_ERROR' });
@@ -121,53 +210,37 @@ async function verifyStudentOtp(req, res) {
       });
     }
 
-    const stored = otpStore.get(student_id);
-    if (!stored) {
-      return res.status(401).json({
-        error: 'OTP_INVALID',
-        message: 'No OTP found for this student. Please request a new one.',
-      });
+    const { ok, reason, stored } = consumeOtp(student_id.trim(), otp);
+
+    if (!ok) {
+      const messages = {
+        NO_OTP:  'No OTP found for this student. Please request a new one.',
+        EXPIRED: 'OTP has expired. Please request a new one.',
+        WRONG:   "Incorrect OTP. Check the SMS sent to your parent's phone.",
+      };
+      return res.status(401).json({ error: 'OTP_INVALID', message: messages[reason] });
     }
 
-    if (Date.now() > stored.expiresAt) {
-      otpStore.delete(student_id);
-      return res.status(401).json({
-        error: 'OTP_INVALID',
-        message: 'OTP has expired. Please request a new one.',
-      });
-    }
-
-    if (stored.otp !== otp.trim()) {
-      return res.status(401).json({
-        error: 'OTP_INVALID',
-        message: 'Incorrect OTP. Check the SMS sent to your parent\'s phone and try again.',
-      });
-    }
-
-    otpStore.delete(student_id);
-    const { studentRecord } = stored;
-
+    const { student } = stored;
     const payload = {
-      sub: studentRecord.student_id,
-      user_id: studentRecord.student_id,
-      student_id: studentRecord.student_id,
-      school_id: studentRecord.school_id,
-      role: 'student',
-      class_id: studentRecord.class_id,
-      section: studentRecord.section,
+      sub:        student.uuid.trim(),
+      user_id:    student.uuid.trim(),
+      student_id: student.uuid.trim(),
+      school_id:  student.school_uuid.trim(),
+      role:       'student',
+      name:       student.full_name,
     };
 
     const token = jwt.sign(payload, process.env.JWT_SECRET, {
       expiresIn: process.env.JWT_EXPIRES_IN || '7d',
     });
 
-    logger.info(`Student JWT issued for ${studentRecord.student_id}`);
-
-    res.json({ token, role: 'student' });
+    logger.info(`Student JWT issued for ${student.uuid}`);
+    res.json({ token, role: 'student', name: student.full_name });
   } catch (err) {
     logger.error('verifyStudentOtp error:', err);
     res.status(500).json({ error: 'SERVER_ERROR' });
   }
 }
 
-module.exports = { requestStudentOtp, verifyStudentOtp };
+module.exports = { login, verifyOtp, requestStudentOtp, verifyStudentOtp };

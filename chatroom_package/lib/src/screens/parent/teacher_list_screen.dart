@@ -45,7 +45,7 @@ class _TeacherListScreenState extends State<TeacherListScreen> {
             Text(
               widget.child.fullName,
               style: TextStyle(
-                  fontSize: 12, color: AppColors.white.withOpacity(0.75)),
+                  fontSize: 12, color: AppColors.white.withValues(alpha:0.75)),
             ),
           ],
         ),
@@ -60,7 +60,7 @@ class _TeacherListScreenState extends State<TeacherListScreen> {
             child: Text(
               'Which teacher do you want to talk to?',
               style: TextStyle(
-                color: AppColors.white.withOpacity(0.85),
+                color: AppColors.white.withValues(alpha:0.85),
                 fontSize: 14,
               ),
             ),

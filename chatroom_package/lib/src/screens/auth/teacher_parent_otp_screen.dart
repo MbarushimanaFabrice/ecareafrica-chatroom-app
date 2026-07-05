@@ -2,22 +2,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import '../../models/user_context.dart';
+import '../../providers/threads_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/auth_service.dart';
-import '../../providers/threads_provider.dart';
 import '../../theme/app_theme.dart';
-import 'student_home_screen.dart';
+import '../teacher/teacher_home_screen.dart';
+import '../parent/child_selection_screen.dart';
 
-class StudentOtpScreen extends StatefulWidget {
-  final String studentId;
+class TeacherParentOtpScreen extends StatefulWidget {
+  final String phone;
 
-  const StudentOtpScreen({super.key, required this.studentId});
+  const TeacherParentOtpScreen({super.key, required this.phone});
 
   @override
-  State<StudentOtpScreen> createState() => _StudentOtpScreenState();
+  State<TeacherParentOtpScreen> createState() => _TeacherParentOtpScreenState();
 }
 
-class _StudentOtpScreenState extends State<StudentOtpScreen> {
+class _TeacherParentOtpScreenState extends State<TeacherParentOtpScreen> {
   final List<TextEditingController> _controllers =
       List.generate(6, (_) => TextEditingController());
   final List<FocusNode> _focusNodes = List.generate(6, (_) => FocusNode());
@@ -31,24 +32,23 @@ class _StudentOtpScreenState extends State<StudentOtpScreen> {
     super.dispose();
   }
 
-  String get _otp =>
-      _controllers.map((c) => c.text).join();
+  String get _otp => _controllers.map((c) => c.text).join();
 
   Future<void> _verify() async {
     if (_otp.length < 6) {
       setState(() => _error = 'Please enter the complete 6-digit OTP.');
       return;
     }
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    setState(() { _loading = true; _error = null; });
+
     try {
-      final res = await ApiService.verifyStudentOtp(widget.studentId, _otp);
+      final res = await ApiService.verifyOtp(widget.phone, _otp);
       final token = res.data['token'] as String;
+      final role  = res.data['role']  as String;
+
       await AuthService.instance.setToken(token);
 
-      // Hydrate user context so teacher-tap navigation has the student_id available.
+      // Hydrate user context before navigating
       try {
         final ctxRes = await ApiService.getMe();
         final ctx = UserContext.fromJson(
@@ -56,22 +56,38 @@ class _StudentOtpScreenState extends State<StudentOtpScreen> {
         );
         AuthService.instance.setUserContext(ctx);
       } catch (_) {
-        // Context load failure is non-fatal — proceed to home screen.
+        // Non-fatal — proceed anyway
       }
 
       if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => ChangeNotifierProvider(
-            create: (_) => ThreadsProvider(),
-            child: const StudentHomeScreen(),
+
+      if (role == 'teacher') {
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ChangeNotifierProvider(
+              create: (_) => ThreadsProvider(),
+              child: const TeacherHomeScreen(),
+            ),
           ),
-        ),
-      );
+          (_) => false,
+        );
+      } else {
+        // parent / school_admin
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ChangeNotifierProvider(
+              create: (_) => ThreadsProvider(),
+              child: const ChildSelectionScreen(),
+            ),
+          ),
+          (_) => false,
+        );
+      }
     } catch (e) {
       setState(() {
-        _error = 'Incorrect OTP. Check the SMS sent to your parent\'s phone and try again.';
+        _error = 'Incorrect OTP. Check the SMS sent to your phone and try again.';
         for (final c in _controllers) c.clear();
         _focusNodes[0].requestFocus();
       });
@@ -81,12 +97,8 @@ class _StudentOtpScreenState extends State<StudentOtpScreen> {
   }
 
   void _onDigitEntered(int index, String value) {
-    if (value.isNotEmpty && index < 5) {
-      _focusNodes[index + 1].requestFocus();
-    }
-    if (value.isEmpty && index > 0) {
-      _focusNodes[index - 1].requestFocus();
-    }
+    if (value.isNotEmpty && index < 5) _focusNodes[index + 1].requestFocus();
+    if (value.isEmpty  && index > 0) _focusNodes[index - 1].requestFocus();
     if (_otp.length == 6) _verify();
   }
 
@@ -104,67 +116,68 @@ class _StudentOtpScreenState extends State<StudentOtpScreen> {
         child: SafeArea(
           child: Column(
             children: [
-              // Header
+              // ── Header ────────────────────────────────────────────────────
               Expanded(
                 flex: 2,
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Container(
-                      width: 80,
-                      height: 80,
+                      width: 76,
+                      height: 76,
                       decoration: BoxDecoration(
-                        color: AppColors.white.withValues(alpha:0.15),
+                        color: Colors.white.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: const Icon(Icons.sms_rounded,
-                          size: 40, color: AppColors.white),
+                          size: 38, color: Colors.white),
                     ).animate().scale(duration: 500.ms, curve: Curves.elasticOut),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 16),
                     const Text(
                       'Enter OTP',
                       style: TextStyle(
-                        color: AppColors.white,
-                        fontSize: 26,
+                        color: Colors.white,
+                        fontSize: 24,
                         fontWeight: FontWeight.w700,
                       ),
-                    ).animate(delay: 200.ms).fadeIn(),
-                    const SizedBox(height: 8),
+                    ).animate(delay: 150.ms).fadeIn(),
+                    const SizedBox(height: 6),
                     Text(
-                      'A 6-digit code was sent to\nyour parent\'s phone',
+                      'A 6-digit code was sent to\n${widget.phone}',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: AppColors.white.withValues(alpha:0.75),
-                        fontSize: 14,
+                        color: Colors.white.withValues(alpha: 0.78),
+                        fontSize: 13,
                       ),
-                    ).animate(delay: 300.ms).fadeIn(),
+                    ).animate(delay: 250.ms).fadeIn(),
                   ],
                 ),
               ),
 
-              // OTP form
+              // ── OTP form ──────────────────────────────────────────────────
               Expanded(
                 flex: 3,
                 child: Container(
                   width: double.infinity,
                   decoration: const BoxDecoration(
                     color: AppColors.background,
-                    borderRadius:
-                        BorderRadius.vertical(top: Radius.circular(32)),
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
                   ),
                   padding: const EdgeInsets.all(28),
                   child: Column(
                     children: [
                       const SizedBox(height: 8),
 
-                      // OTP boxes
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: List.generate(6, (i) => _OtpBox(
-                          controller: _controllers[i],
-                          focusNode: _focusNodes[i],
-                          onChanged: (v) => _onDigitEntered(i, v),
-                        )),
+                        children: List.generate(
+                          6,
+                          (i) => _OtpBox(
+                            controller: _controllers[i],
+                            focusNode: _focusNodes[i],
+                            onChanged: (v) => _onDigitEntered(i, v),
+                          ),
+                        ),
                       ),
 
                       if (_error != null) ...[
@@ -172,7 +185,7 @@ class _StudentOtpScreenState extends State<StudentOtpScreen> {
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: AppColors.error.withValues(alpha:0.08),
+                            color: AppColors.error.withValues(alpha: 0.08),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: Row(
@@ -183,8 +196,7 @@ class _StudentOtpScreenState extends State<StudentOtpScreen> {
                               Expanded(
                                 child: Text(_error!,
                                     style: const TextStyle(
-                                        color: AppColors.error,
-                                        fontSize: 13)),
+                                        color: AppColors.error, fontSize: 13)),
                               ),
                             ],
                           ),
@@ -198,41 +210,37 @@ class _StudentOtpScreenState extends State<StudentOtpScreen> {
                         child: ElevatedButton(
                           onPressed: _loading ? null : _verify,
                           style: ElevatedButton.styleFrom(
-                            padding:
-                                const EdgeInsets.symmetric(vertical: 16),
+                            padding: const EdgeInsets.symmetric(vertical: 16),
                           ),
                           child: _loading
                               ? const SizedBox(
-                                  width: 22,
-                                  height: 22,
+                                  width: 22, height: 22,
                                   child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: AppColors.white),
+                                      strokeWidth: 2, color: AppColors.white),
                                 )
                               : const Text('Verify OTP',
                                   style: TextStyle(fontSize: 16)),
                         ),
                       ),
 
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 12),
 
                       TextButton(
                         onPressed: () => Navigator.pop(context),
-                        child: const Text('← Back to Student ID'),
+                        child: const Text('← Back'),
                       ),
 
                       const Spacer(),
 
                       Text(
-                        'OTP expires in 10 minutes',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.textHint),
+                        'OTP expires in ${const String.fromEnvironment('OTP_MINUTES', defaultValue: '10')} minutes',
+                        style: const TextStyle(
+                            fontSize: 12, color: AppColors.textHint),
                       ),
                     ],
                   ),
                 ),
-              ).animate(delay: 200.ms).slideY(begin: 0.1, end: 0).fadeIn(),
+              ).animate(delay: 150.ms).slideY(begin: 0.1, end: 0).fadeIn(),
             ],
           ),
         ),
@@ -279,8 +287,7 @@ class _OtpBox extends StatelessWidget {
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
-            borderSide:
-                const BorderSide(color: AppColors.primary, width: 2),
+            borderSide: const BorderSide(color: AppColors.primary, width: 2),
           ),
           contentPadding: EdgeInsets.zero,
         ),

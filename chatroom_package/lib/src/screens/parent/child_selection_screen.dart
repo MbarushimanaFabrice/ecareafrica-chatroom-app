@@ -3,24 +3,40 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../../models/user_context.dart';
 import '../../services/auth_service.dart';
 import '../../theme/app_theme.dart';
+import '../auth/teacher_parent_login_screen.dart';
 import 'teacher_list_screen.dart';
 
-class ChildSelectionScreen extends StatelessWidget {
+class ChildSelectionScreen extends StatefulWidget {
   final ChildInfo? preselectedChild;
 
   const ChildSelectionScreen({super.key, this.preselectedChild});
+
+  @override
+  State<ChildSelectionScreen> createState() => _ChildSelectionScreenState();
+}
+
+class _ChildSelectionScreenState extends State<ChildSelectionScreen> {
+  Future<void> _logout() async {
+    await AuthService.instance.clearSession();
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const TeacherParentLoginScreen()),
+      (_) => false,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final ctx = AuthService.instance.userContext;
 
     // If preselected, skip directly to teacher list
-    if (preselectedChild != null) {
+    if (widget.preselectedChild != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (_) => TeacherListScreen(child: preselectedChild!),
+            builder: (_) => TeacherListScreen(child: widget.preselectedChild!),
           ),
         );
       });
@@ -34,10 +50,31 @@ class ChildSelectionScreen extends StatelessWidget {
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: const Text('Select Child'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Select Child'),
+            if (ctx != null)
+              Text(
+                ctx.fullName,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: AppColors.white.withValues(alpha: 0.75),
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
+          ],
+        ),
         backgroundColor: AppColors.primaryDark,
         foregroundColor: AppColors.white,
         elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout_rounded),
+            tooltip: 'Logout',
+            onPressed: _logout,
+          ),
+        ],
       ),
       body: children.isEmpty
           ? const Center(

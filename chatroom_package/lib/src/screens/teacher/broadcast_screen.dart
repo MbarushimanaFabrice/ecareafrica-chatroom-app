@@ -158,7 +158,7 @@ class _BroadcastScreenState extends State<BroadcastScreen> {
             decoration: BoxDecoration(
               color: AppColors.accentLight,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.accent.withOpacity(0.3)),
+              border: Border.all(color: AppColors.accent.withValues(alpha:0.3)),
             ),
             child: const Row(
               children: [

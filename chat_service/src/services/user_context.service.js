@@ -1,137 +1,254 @@
-const axios = require('axios');
-const { query } = require('../db/pool');
-const { logger } = require('../utils/logger');
-const path = require('path');
-const fs = require('fs');
+const { queryEca } = require('../db/ecafrica_pool');
+const { logger }   = require('../utils/logger');
 
-const CACHE_TTL_MINUTES = 30;
+// ── Main entry point ──────────────────────────────────────────────────────────
+async function getUserContext(userId, schoolId, _token) {
+  // userId is users.uuid for teacher/parent, students.uuid for student
+  // schoolId is a string of the numeric school id from the JWT
 
-// UUID → filename mapping
-const MOCK_FILE_MAP = {
-  '00000000-0000-0000-0001-000000000001': 'user-context-parent-p-001.json',
-  '00000000-0000-0000-0001-000000000002': 'user-context-parent-p-002.json',
-  '00000000-0000-0000-0001-000000000003': 'user-context-parent-p-003.json',
-  '00000000-0000-0000-0002-000000000001': 'user-context-teacher-t-001.json',
-  '00000000-0000-0000-0002-000000000002': 'user-context-teacher-t-002.json',
-  '00000000-0000-0000-0002-000000000003': 'user-context-teacher-t-003.json',
-  '00000000-0000-0000-0003-000000000001': 'user-context-student-s-001.json',
-};
+  // Try teacher first, then parent, then student
+  const role = await detectRole(userId);
 
-async function getUserContext(userId, schoolId, token) {
-  if (process.env.USE_MOCK_BRIDGE === 'true') {
-    const context = await getMockContext(userId, schoolId);
-    if (!context) {
-      throw new Error('Could not resolve user context from mock data.');
-    }
-    return context;
-  }
+  if (role === 'teacher')  return buildTeacherContext(userId, schoolId);
+  if (role === 'parent')   return buildParentContext(userId, schoolId);
+  if (role === 'student')  return buildStudentContext(userId);
 
-  const cacheKey = `user_context:${schoolId}:${userId}`;
-
-  const cached = await query(
-    `SELECT context_json FROM chat_user_context_cache
-     WHERE cache_key = $1 AND expires_at > NOW()`,
-    [cacheKey]
-  );
-
-  if (cached.rows.length > 0) {
-    return cached.rows[0].context_json;
-  }
-
-  const context = await fetchFromBridge(token);
-
-  if (!context) {
-    throw new Error('Could not resolve user context.');
-  }
-
-  const expiresAt = new Date(Date.now() + CACHE_TTL_MINUTES * 60 * 1000);
-  await query(
-    `INSERT INTO chat_user_context_cache
-       (cache_key, school_id, user_id, user_role, context_json, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (cache_key) DO UPDATE SET
-       context_json = EXCLUDED.context_json,
-       expires_at   = EXCLUDED.expires_at,
-       updated_at   = NOW()`,
-    [cacheKey, schoolId, userId, context.role, context, expiresAt]
-  );
-
-  return context;
+  throw new Error(`Could not resolve user context for userId=${userId}`);
 }
 
-async function fetchFromBridge(token) {
-  try {
-    const res = await axios.get(
-      `${process.env.MAIN_API_BASE_URL}/api/internal/user-context`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'X-Chat-Service-Key': process.env.CHAT_SERVICE_KEY,
-        },
-        timeout: 5000,
-      }
-    );
-    return res.data;
-  } catch (err) {
-    logger.error('Bridge call failed:', err.message);
-    throw err;
-  }
+// ── Role detection ────────────────────────────────────────────────────────────
+async function detectRole(uuid) {
+  const r = await queryEca(
+    `SELECT role FROM users WHERE uuid = $1 AND deleted_at IS NULL LIMIT 1`,
+    [uuid]
+  );
+  if (r.rows.length > 0) return r.rows[0].role;
+
+  const s = await queryEca(
+    `SELECT id FROM students WHERE uuid = $1 AND deleted_at IS NULL LIMIT 1`,
+    [uuid]
+  );
+  if (s.rows.length > 0) return 'student';
+
+  return null;
 }
 
-async function getMockContext(userId, schoolId) {
-  const mockDir = path.join(__dirname, '../../mock-data');
+// ── Teacher context ───────────────────────────────────────────────────────────
+async function buildTeacherContext(uuid, schoolId) {
+  const userRow = await queryEca(
+    `SELECT id, uuid, name, school_id FROM users
+     WHERE uuid = $1 AND deleted_at IS NULL LIMIT 1`,
+    [uuid]
+  );
+  if (userRow.rows.length === 0) throw new Error('Teacher not found');
+  const teacher = userRow.rows[0];
 
-  // Look up file by UUID
-  const filename = MOCK_FILE_MAP[userId];
-  if (filename) {
-    const filePath = path.join(mockDir, filename);
-    if (fs.existsSync(filePath)) {
-      const raw = fs.readFileSync(filePath, 'utf8');
-      return JSON.parse(raw);
+  const rows = await queryEca(
+    `SELECT DISTINCT
+       s.uuid               AS student_id,
+       s.first_name || ' ' || s.last_name AS student_name,
+       s.student_id_number,
+       sec.id::text         AS section_id,
+       sec.full_name        AS section_name,
+       subj.name            AS subject_name,
+       pg.first_name || ' ' || pg.last_name AS parent_name,
+       pg.phone             AS parent_phone,
+       pu.uuid              AS parent_user_id
+     FROM teacher_section_subjects tss
+     JOIN sections sec   ON sec.id  = tss.section_id  AND sec.deleted_at IS NULL
+     JOIN subjects subj  ON subj.id = tss.subject_id  AND subj.deleted_at IS NULL
+     JOIN student_section_enrollments sse
+                         ON sse.section_id = sec.id   AND sse.status = 'active'
+     JOIN students s     ON s.id    = sse.student_id  AND s.status = 'active'
+                                                       AND s.deleted_at IS NULL
+     LEFT JOIN student_parent_links spl ON spl.student_id = s.id AND spl.is_primary = true
+     LEFT JOIN parents_guardians pg     ON pg.id = spl.parent_id
+     LEFT JOIN users pu                 ON pu.id = pg.user_id
+     WHERE tss.teacher_id = $1
+       AND tss.deleted_at IS NULL
+     ORDER BY s.uuid, subj.name`,
+    [teacher.id]
+  );
+
+  // Group students
+  const studentMap = new Map();
+  const sectionMap = new Map();
+  for (const row of rows.rows) {
+    if (!studentMap.has(row.student_id)) {
+      studentMap.set(row.student_id, {
+        student_id:        row.student_id,
+        full_name:         row.student_name,
+        admission_number:  row.student_id_number,
+        section_id:        row.section_id,
+        section:           row.section_name,
+        parent_name:       row.parent_name,
+        parent_phone:      row.parent_phone,
+        parent_user_id:    row.parent_user_id,
+        subjects:          [],
+      });
+    }
+    studentMap.get(row.student_id).subjects.push(row.subject_name);
+
+    if (row.section_id && !sectionMap.has(row.section_id)) {
+      sectionMap.set(row.section_id, {
+        class_id:   row.section_id,
+        class_name: row.section_name,
+        section:    row.section_name,
+      });
     }
   }
 
-  // Fallback with proper UUIDs
-  logger.warn(`No mock file found for userId: ${userId} — using fallback`);
   return {
-    user_id: userId,
-    school_id: schoolId,
-    role: 'parent',
-    full_name: 'Test User',
-    children: [
-      {
-        student_id: '00000000-0000-0000-0003-000000000001',
-        full_name: 'John Doe',
-        class_id: '00000000-0000-0000-0004-000000000001',
-        section: 'A',
-        teachers: [
-          {
-            teacher_id: '00000000-0000-0000-0002-000000000001',
-            user_id: '00000000-0000-0000-0002-000000000001',
-            full_name: 'David Mugisha',
-            subject: 'English',
-            is_online: false,
-          },
-          {
-            teacher_id: '00000000-0000-0000-0002-000000000002',
-            user_id: '00000000-0000-0000-0002-000000000002',
-            full_name: 'Sarah Uwimana',
-            subject: 'Mathematics',
-            is_online: true,
-          },
-        ],
-      },
-    ],
+    user_id:   uuid,
+    school_id: String(teacher.school_id),
+    role:      'teacher',
+    full_name: teacher.name,
+    students:  Array.from(studentMap.values()),
+    subjects:  [...new Set(rows.rows.map(r => r.subject_name))],
+    classes:   Array.from(sectionMap.values()),
   };
 }
 
-async function invalidateCache(userId, schoolId) {
-  const cacheKey = `user_context:${schoolId}:${userId}`;
-  await query(
-    'DELETE FROM chat_user_context_cache WHERE cache_key = $1',
-    [cacheKey]
+// ── Parent context ────────────────────────────────────────────────────────────
+async function buildParentContext(uuid, schoolId) {
+  const userRow = await queryEca(
+    `SELECT id, uuid, name, school_id FROM users
+     WHERE uuid = $1 AND deleted_at IS NULL LIMIT 1`,
+    [uuid]
   );
-  logger.info(`Cache invalidated for ${cacheKey}`);
+  if (userRow.rows.length === 0) throw new Error('Parent user not found');
+  const parentUser = userRow.rows[0];
+
+  const pgRow = await queryEca(
+    `SELECT id FROM parents_guardians WHERE user_id = $1 LIMIT 1`,
+    [parentUser.id]
+  );
+  if (pgRow.rows.length === 0) throw new Error('Parent profile not found');
+  const parentId = pgRow.rows[0].id;
+
+  const rows = await queryEca(
+    `SELECT DISTINCT
+       s.uuid               AS student_id,
+       s.first_name || ' ' || s.last_name AS student_name,
+       s.student_id_number,
+       sec.full_name        AS section_name,
+       tu.uuid              AS teacher_id,
+       tu.name              AS teacher_name,
+       subj.name            AS subject_name
+     FROM student_parent_links spl
+     JOIN students s     ON s.id    = spl.student_id   AND s.status = 'active'
+                                                         AND s.deleted_at IS NULL
+     JOIN student_section_enrollments sse
+                         ON sse.student_id = s.id       AND sse.status = 'active'
+     JOIN sections sec   ON sec.id  = sse.section_id   AND sec.deleted_at IS NULL
+     JOIN teacher_section_subjects tss
+                         ON tss.section_id = sec.id     AND tss.deleted_at IS NULL
+     JOIN users tu       ON tu.id   = tss.teacher_id   AND tu.role = 'teacher'
+     JOIN subjects subj  ON subj.id = tss.subject_id   AND subj.deleted_at IS NULL
+     WHERE spl.parent_id = $1
+     ORDER BY s.uuid, tu.name, subj.name`,
+    [parentId]
+  );
+
+  // Group by child
+  const childMap = new Map();
+  for (const row of rows.rows) {
+    if (!childMap.has(row.student_id)) {
+      childMap.set(row.student_id, {
+        student_id:       row.student_id,
+        full_name:        row.student_name,
+        admission_number: row.student_id_number,
+        class_id:         row.student_id,
+        section:          row.section_name,
+        teachers:         [],
+      });
+    }
+    const child = childMap.get(row.student_id);
+    const alreadyAdded = child.teachers.some(
+      t => t.teacher_id === row.teacher_id && t.subject === row.subject_name
+    );
+    if (!alreadyAdded) {
+      child.teachers.push({
+        teacher_id: row.teacher_id,
+        user_id:    row.teacher_id,
+        full_name:  row.teacher_name,
+        subject:    row.subject_name,
+        is_online:  false,
+      });
+    }
+  }
+
+  return {
+    user_id:   uuid,
+    school_id: String(parentUser.school_id),
+    role:      'parent',
+    full_name: parentUser.name,
+    children:  Array.from(childMap.values()),
+  };
 }
 
-module.exports = { getUserContext, invalidateCache };
+// ── Student context ───────────────────────────────────────────────────────────
+async function buildStudentContext(uuid) {
+  const studentRow = await queryEca(
+    `SELECT id, uuid, school_id,
+            first_name || ' ' || last_name AS full_name,
+            student_id_number
+     FROM students
+     WHERE uuid = $1 AND deleted_at IS NULL LIMIT 1`,
+    [uuid]
+  );
+  if (studentRow.rows.length === 0) throw new Error('Student not found');
+  const student = studentRow.rows[0];
+
+  const rows = await queryEca(
+    `SELECT DISTINCT
+       tu.uuid              AS teacher_id,
+       tu.name              AS teacher_name,
+       subj.name            AS subject_name,
+       sec.full_name        AS section_name,
+       pg.phone             AS parent_phone
+     FROM student_section_enrollments sse
+     JOIN sections sec   ON sec.id  = sse.section_id   AND sec.deleted_at IS NULL
+     JOIN teacher_section_subjects tss
+                         ON tss.section_id = sec.id     AND tss.deleted_at IS NULL
+     JOIN users tu       ON tu.id   = tss.teacher_id   AND tu.role = 'teacher'
+     JOIN subjects subj  ON subj.id = tss.subject_id   AND subj.deleted_at IS NULL
+     LEFT JOIN student_parent_links spl ON spl.student_id = sse.student_id
+                                        AND spl.is_primary = true
+     LEFT JOIN parents_guardians pg     ON pg.id = spl.parent_id
+     WHERE sse.student_id = $1 AND sse.status = 'active'
+     ORDER BY tu.name, subj.name`,
+    [student.id]
+  );
+
+  const teachers = rows.rows.map(r => ({
+    teacher_id: r.teacher_id,
+    user_id:    r.teacher_id,
+    full_name:  r.teacher_name,
+    subject:    r.subject_name,
+    is_online:  false,
+  }));
+
+  // Deduplicate teachers (same teacher may appear for multiple subjects)
+  const uniqueTeachers = teachers.filter(
+    (t, i, arr) => arr.findIndex(x => x.teacher_id === t.teacher_id && x.subject === t.subject) === i
+  );
+
+  const section     = rows.rows[0]?.section_name  || '';
+  const parentPhone = rows.rows[0]?.parent_phone  || '';
+
+  return {
+    user_id:          uuid,
+    student_id:       uuid,
+    school_id:        String(student.school_id),
+    role:             'student',
+    full_name:        student.full_name,
+    admission_number: student.student_id_number,
+    class_id:         uuid,
+    section,
+    parent_phone:     parentPhone,
+    teachers:         uniqueTeachers,
+  };
+}
+
+module.exports = { getUserContext };

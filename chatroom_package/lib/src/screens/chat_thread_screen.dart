@@ -152,7 +152,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                     fontSize: 11,
                     color: widget.thread.isOnline
                         ? AppColors.accent
-                        : AppColors.white.withOpacity(0.6),
+                        : AppColors.white.withValues(alpha:0.6),
                   ),
                 ),
               ],
@@ -211,7 +211,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 children: [
                   Icon(Icons.chat_bubble_outline_rounded,
                       size: 64,
-                      color: AppColors.textHint.withOpacity(0.5)),
+                      color: AppColors.textHint.withValues(alpha:0.5)),
                   const SizedBox(height: 16),
                   Text(
                     'This is the beginning of your conversation\nwith ${widget.thread.displayName}',

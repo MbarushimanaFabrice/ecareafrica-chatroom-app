@@ -9,6 +9,7 @@ import '../../models/chat_thread.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/common/shimmer_list.dart';
 import '../../widgets/common/online_dot.dart';
+import '../auth/teacher_parent_login_screen.dart';
 import '../chat_thread_screen.dart';
 
 class StudentHomeScreen extends StatefulWidget {
@@ -21,6 +22,16 @@ class StudentHomeScreen extends StatefulWidget {
 class _StudentHomeScreenState extends State<StudentHomeScreen> {
   List<TeacherContact> _teachers = [];
   bool _loadingTeachers = true;
+
+  Future<void> _logout() async {
+    await AuthService.instance.clearSession();
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const TeacherParentLoginScreen()),
+      (_) => false,
+    );
+  }
 
   @override
   void initState() {
@@ -64,7 +75,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
             if (ctx != null)
               Text(ctx.fullName,
                   style: TextStyle(
-                      color: AppColors.white.withOpacity(0.75),
+                      color: AppColors.white.withValues(alpha:0.75),
                       fontSize: 12)),
           ],
         ),
@@ -72,7 +83,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
           Consumer<ThreadsProvider>(
             builder: (_, p, __) => p.totalUnread > 0
                 ? Container(
-                    margin: const EdgeInsets.only(right: 16),
+                    margin: const EdgeInsets.only(right: 8),
                     padding: const EdgeInsets.symmetric(
                         horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
@@ -86,6 +97,11 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                             fontSize: 12)),
                   )
                 : const SizedBox.shrink(),
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout_rounded, color: AppColors.white),
+            tooltip: 'Logout',
+            onPressed: _logout,
           ),
         ],
       ),

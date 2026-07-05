@@ -1,18 +1,25 @@
-const { query, getClient } = require('../db/pool');
-const { v4: uuidv4 } = require('uuid');
+const { queryEca } = require('../db/ecafrica_pool');
+const { v4: uuidv4, v5: uuidv5 } = require('uuid');
 const { getUserContext } = require('../services/user_context.service');
 const { publishFirebaseEvent } = require('../services/firebase.service');
 const { sendPushNotification } = require('../services/notification.service');
 const { logger } = require('../utils/logger');
 
-// ── Enrich threads with display_name + subject_label from user context ────────
+// Fixed namespace UUID for deterministic thread IDs (UUID v5)
+const THREAD_NS = 'c3a4b5d6-e7f8-4a9b-b0c1-d2e3f4a5b6c7';
+
+function buildThreadId({ schoolId, teacherId, studentId, initiator, parentId }) {
+  const key = [schoolId, teacherId, studentId, initiator, parentId || ''].join(':');
+  return uuidv5(key, THREAD_NS);
+}
+
+// ── Enrich threads with display_name + subject_label ─────────────────────────
 async function resolveDisplayNames(threads, userId, schoolId, role, authToken) {
   if (!threads.length) return threads;
   try {
     const ctx = await getUserContext(userId, schoolId, authToken);
 
     if (role === 'parent') {
-      // Build map: teacher user_id → { name, subject }
       const teacherMap = {};
       for (const child of (ctx.children || [])) {
         for (const t of (child.teachers || [])) {
@@ -25,47 +32,34 @@ async function resolveDisplayNames(threads, userId, schoolId, role, authToken) {
         const info = teacherMap[t.teacher_id];
         return {
           ...t,
-          display_name: info ? `${info.name} — ${info.subject} Teacher` : '',
+          display_name:  info ? `${info.name} — ${info.subject} Teacher` : '',
           subject_label: info?.subject ?? null,
         };
       });
     }
 
     if (role === 'teacher') {
-      // Build maps: student_id → full_name, parent_id → "Parent of <student>"
       const studentMap = {};
-      const parentMap = {};
-      for (const cls of (ctx.classes || [])) {
-        for (const student of (cls.students || [])) {
-          studentMap[student.student_id] = student.full_name;
-          for (const pid of (student.parent_ids || [])) {
-            if (!parentMap[pid]) {
-              parentMap[pid] = `Parent of ${student.full_name}`;
-            }
-          }
+      const parentMap  = {};
+      for (const student of (ctx.students || [])) {
+        studentMap[student.student_id] = student.full_name;
+        if (student.parent_user_id) {
+          parentMap[student.parent_user_id] = `Parent of ${student.full_name}`;
         }
       }
       return threads.map(t => {
-        let displayName = '';
-        if (t.thread_initiator === 'student') {
-          displayName = t.student_id && studentMap[t.student_id]
-            ? studentMap[t.student_id]
-            : '';
-        } else {
-          displayName = t.parent_id && parentMap[t.parent_id]
-            ? parentMap[t.parent_id]
-            : '';
-        }
+        const displayName = t.thread_initiator === 'student'
+          ? (studentMap[t.student_id] || '')
+          : (parentMap[t.parent_id]   || '');
         return {
           ...t,
-          display_name: displayName,
+          display_name:  displayName,
           subject_label: (ctx.subjects || [])[0] ?? null,
         };
       });
     }
 
     if (role === 'student') {
-      // Build map: teacher user_id → { name, subject }
       const teacherMap = {};
       for (const t of (ctx.teachers || [])) {
         if (!teacherMap[t.user_id]) {
@@ -76,7 +70,7 @@ async function resolveDisplayNames(threads, userId, schoolId, role, authToken) {
         const info = teacherMap[t.teacher_id];
         return {
           ...t,
-          display_name: info ? `${info.name} — ${info.subject} Teacher` : '',
+          display_name:  info ? `${info.name} — ${info.subject} Teacher` : '',
           subject_label: info?.subject ?? null,
         };
       });
@@ -84,7 +78,7 @@ async function resolveDisplayNames(threads, userId, schoolId, role, authToken) {
   } catch (e) {
     logger.warn('resolveDisplayNames failed:', e.message);
   }
-  return threads; // graceful fallback — return without names
+  return threads;
 }
 
 // ── GET /chat/threads ─────────────────────────────────────────────────────────
@@ -92,48 +86,51 @@ async function getThreads(req, res) {
   try {
     const { sub: userId, school_id: schoolId, role } = req.user;
 
-    let whereClause;
-    let params;
-
-    if (role === 'parent') {
-      whereClause = 't.parent_id = $1 AND t.school_id = $2';
-      params = [userId, schoolId];
-    } else if (role === 'teacher') {
-      whereClause = 't.teacher_id = $1 AND t.school_id = $2';
-      params = [userId, schoolId];
+    let roleFilter;
+    if (role === 'teacher') {
+      roleFilter = `teacher_id = $2`;
+    } else if (role === 'parent') {
+      roleFilter = `parent_id = $2`;
     } else if (role === 'student') {
-      whereClause = 't.student_id = $1 AND t.school_id = $2 AND t.thread_initiator = $3';
-      params = [userId, schoolId, 'student'];
+      roleFilter = `student_id = $2 AND thread_initiator = 'student'`;
     } else {
       return res.status(403).json({ error: 'FORBIDDEN' });
     }
 
-    const result = await query(
-      `SELECT t.*,
-              m.content          AS last_message_preview,
-              m.message_type     AS last_message_type,
-              COALESCE(
-                (SELECT COUNT(*) FROM chat_message_status s
-                 WHERE s.message_id IN (
-                   SELECT id FROM chat_messages WHERE thread_id = t.id
-                 ) AND s.user_id = $${params.length + 1} AND s.status != 'seen'),
-                0
-              )::int             AS unread_count,
-              cas.is_online,
-              cas.last_seen_at
-       FROM   chat_threads t
-       LEFT JOIN LATERAL (
-         SELECT content, message_type FROM chat_messages
-         WHERE thread_id = t.id ORDER BY sent_at DESC LIMIT 1
-       ) m ON TRUE
-       LEFT JOIN chat_active_status cas ON (
-         CASE WHEN $${params.length + 2} = 'parent' THEN cas.user_id = t.teacher_id
-              WHEN $${params.length + 2} = 'teacher' THEN cas.user_id = t.parent_id
-              ELSE cas.user_id = t.teacher_id END
+    const result = await queryEca(
+      `WITH thread_anchors AS (
+         SELECT thread_id, thread_type, thread_initiator,
+                teacher_id, student_id, parent_id, school_id
+         FROM   "chatRoom_history"
+         WHERE  message_type = 'system' AND school_id = $1 AND ${roleFilter}
+       ),
+       latest_msg AS (
+         SELECT DISTINCT ON (thread_id)
+                thread_id, content,
+                message_type AS last_message_type,
+                sent_at
+         FROM   "chatRoom_history"
+         WHERE  message_type != 'system' AND is_deleted = FALSE
+         ORDER  BY thread_id, sent_at DESC
+       ),
+       unread AS (
+         SELECT thread_id, COUNT(*)::int AS unread_count
+         FROM   "chatRoom_history"
+         WHERE  recipient_id = $2 AND status != 'seen'
+                AND is_deleted = FALSE AND message_type != 'system'
+         GROUP  BY thread_id
        )
-       WHERE  ${whereClause}
-       ORDER  BY t.last_message_at DESC NULLS LAST`,
-      [...params, userId, role]
+       SELECT ta.*,
+              ta.thread_id         AS id,
+              lm.content           AS last_message_preview,
+              lm.last_message_type,
+              lm.sent_at           AS last_message_at,
+              COALESCE(u.unread_count, 0) AS unread_count
+       FROM   thread_anchors ta
+       LEFT   JOIN latest_msg lm ON lm.thread_id = ta.thread_id
+       LEFT   JOIN unread      u ON u.thread_id  = ta.thread_id
+       ORDER  BY COALESCE(lm.sent_at, NOW()) DESC`,
+      [schoolId, userId]
     );
 
     const enriched = await resolveDisplayNames(
@@ -150,40 +147,50 @@ async function getThreads(req, res) {
 // ── POST /chat/threads ────────────────────────────────────────────────────────
 async function createThread(req, res) {
   try {
-    const { sub: userId, school_id: schoolId } = req.user;
+    const { sub: userId, school_id: schoolId, role } = req.user;
     const { teacher_id, student_id, thread_type = 'direct', thread_initiator, parent_id } = req.body;
-
-    logger.info(`createThread called: userId=${userId} schoolId=${schoolId} teacherId=${teacher_id} studentId=${student_id} role=${req.user.role}`);
 
     if (!teacher_id || !student_id) {
       return res.status(400).json({ error: 'INVALID_REQUEST', message: 'teacher_id and student_id are required.' });
     }
 
-    const initiator = thread_initiator || (req.user.role === 'student' ? 'student' : 'parent');
-    const pId = parent_id || (req.user.role === 'parent' ? userId : null);
+    const initiator = thread_initiator || (role === 'student' ? 'student' : 'parent');
+    const pId = parent_id || (role === 'parent' ? userId : null);
 
-    logger.info(`createThread params: schoolId=${schoolId} type=${thread_type} initiator=${initiator} pId=${pId} teacherId=${teacher_id} studentId=${student_id} createdBy=${userId}`);
+    const threadId = buildThreadId({
+      schoolId, teacherId: teacher_id, studentId: student_id,
+      initiator, parentId: pId,
+    });
 
-    const result = await query(
-      `INSERT INTO chat_threads
-         (school_id, thread_type, thread_initiator, parent_id, teacher_id, student_id, created_by, updated_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-       ON CONFLICT (parent_id, teacher_id, student_id, thread_initiator)
-       DO UPDATE SET updated_at = NOW()
-       RETURNING *`,
-      [schoolId, thread_type, initiator, pId, teacher_id, student_id, userId]
+    // System row anchors the thread; idempotent on conflict
+    await queryEca(
+      `INSERT INTO "chatRoom_history"
+         (school_id, thread_id, thread_type, thread_initiator,
+          teacher_id, student_id, parent_id,
+          sender_id, sender_role, message_type, content)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'system','__thread_created__')
+       ON CONFLICT (thread_id) WHERE message_type = 'system' DO NOTHING`,
+      [schoolId, threadId, thread_type, initiator,
+       teacher_id, student_id, pId, userId, role]
     );
 
-    logger.info(`createThread success: threadId=${result.rows[0]?.id}`);
+    const result = await queryEca(
+      `SELECT thread_id AS id, thread_id, thread_type, thread_initiator,
+              teacher_id, student_id, parent_id, school_id
+       FROM   "chatRoom_history"
+       WHERE  thread_id = $1 AND message_type = 'system'
+       LIMIT  1`,
+      [threadId]
+    );
+
+    logger.info(`createThread: threadId=${threadId}`);
     const [enriched] = await resolveDisplayNames(
-      result.rows, userId, schoolId, req.user.role,
+      result.rows, userId, schoolId, role,
       req.headers.authorization?.slice(7)
     );
     res.status(200).json({ data: enriched });
   } catch (err) {
-    logger.error('createThread error message:', err.message);
-    logger.error('createThread error detail:', err.detail);
-    logger.error('createThread error code:', err.code);
+    logger.error('createThread error:', err.message);
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }
 }
@@ -193,31 +200,28 @@ async function getMessages(req, res) {
   try {
     const { sub: userId, school_id: schoolId } = req.user;
     const { threadId } = req.params;
-    const page  = parseInt(req.query.page  || '1');
-    const limit = parseInt(req.query.limit || '30');
+    const page   = parseInt(req.query.page  || '1');
+    const limit  = parseInt(req.query.limit || '30');
     const offset = (page - 1) * limit;
 
-    const threadCheck = await query(
-      `SELECT id FROM chat_threads
-       WHERE id = $1 AND school_id = $2
-         AND (parent_id = $3 OR teacher_id = $3 OR student_id = $3)`,
+    const accessCheck = await queryEca(
+      `SELECT 1 FROM "chatRoom_history"
+       WHERE  thread_id = $1 AND school_id = $2 AND message_type = 'system'
+         AND  (teacher_id = $3 OR parent_id = $3 OR student_id = $3)
+       LIMIT  1`,
       [threadId, schoolId, userId]
     );
-    if (threadCheck.rows.length === 0) {
+    if (accessCheck.rows.length === 0) {
       return res.status(403).json({ error: 'FORBIDDEN' });
     }
 
-    const result = await query(
-      `SELECT m.*,
-              s.status   AS delivery_status,
-              s.seen_at
-       FROM   chat_messages m
-       LEFT JOIN chat_message_status s
-              ON s.message_id = m.id AND s.user_id = $3
-       WHERE  m.thread_id = $1 AND m.school_id = $2
-       ORDER  BY m.sent_at ASC
-       LIMIT  $4 OFFSET $5`,
-      [threadId, schoolId, userId, limit, offset]
+    const result = await queryEca(
+      `SELECT * FROM "chatRoom_history"
+       WHERE  thread_id = $1 AND school_id = $2
+         AND  message_type != 'system' AND is_deleted = FALSE
+       ORDER  BY sent_at ASC
+       LIMIT  $3 OFFSET $4`,
+      [threadId, schoolId, limit, offset]
     );
 
     res.json({ data: result.rows, page, limit });
@@ -229,20 +233,24 @@ async function getMessages(req, res) {
 
 // ── POST /chat/messages ───────────────────────────────────────────────────────
 async function sendMessage(req, res) {
-  const client = await getClient();
   try {
-    await client.query('BEGIN');
-
     const { sub: senderId, school_id: schoolId, role: senderRole } = req.user;
-    const { thread_id, message_type = 'text', content, media_local_ref,
-            media_type, media_size_bytes, original_filename } = req.body;
+    const { thread_id, message_type = 'text', content,
+            media_url, media_type, media_size_bytes, original_filename } = req.body;
 
     if (!thread_id) {
       return res.status(400).json({ error: 'INVALID_REQUEST', message: 'thread_id is required.' });
     }
+    if (!content && !media_url) {
+      return res.status(400).json({ error: 'INVALID_REQUEST', message: 'content or media_url is required.' });
+    }
 
-    const threadRes = await client.query(
-      `SELECT * FROM chat_threads WHERE id = $1 AND school_id = $2`,
+    // Get thread context from anchor row
+    const threadRes = await queryEca(
+      `SELECT thread_type, thread_initiator, teacher_id, student_id, parent_id
+       FROM   "chatRoom_history"
+       WHERE  thread_id = $1 AND school_id = $2 AND message_type = 'system'
+       LIMIT  1`,
       [thread_id, schoolId]
     );
     if (threadRes.rows.length === 0) {
@@ -250,46 +258,36 @@ async function sendMessage(req, res) {
     }
     const thread = threadRes.rows[0];
 
-    const msgId = uuidv4();
-    const msgRes = await client.query(
-      `INSERT INTO chat_messages
-         (id, school_id, thread_id, sender_id, sender_role, message_type,
-          content, media_local_ref, media_type, media_size_bytes, original_filename,
-          created_by, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$4,$4)
-       RETURNING *`,
-      [msgId, schoolId, thread_id, senderId, senderRole, message_type,
-       content, media_local_ref, media_type, media_size_bytes, original_filename]
-    );
-    const message = msgRes.rows[0];
-
-    await client.query(
-      `UPDATE chat_threads SET last_message_at = NOW(), updated_by = $1 WHERE id = $2`,
-      [senderId, thread_id]
-    );
-
-    await client.query(
-      `INSERT INTO chat_message_status (message_id, user_id, school_id, status)
-       VALUES ($1, $2, $3, 'sent')
-       ON CONFLICT (message_id, user_id) DO NOTHING`,
-      [msgId, senderId, schoolId]
-    );
-
-    await client.query('COMMIT');
-
     const recipientId = senderRole === 'teacher'
       ? (thread.parent_id || thread.student_id)
       : thread.teacher_id;
 
+    const msgRes = await queryEca(
+      `INSERT INTO "chatRoom_history"
+         (school_id, thread_id, thread_type, thread_initiator,
+          teacher_id, student_id, parent_id,
+          sender_id, sender_role, message_type,
+          content, media_url, media_type, media_size_bytes, original_filename,
+          recipient_id, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'sent')
+       RETURNING *`,
+      [schoolId, thread_id, thread.thread_type, thread.thread_initiator,
+       thread.teacher_id, thread.student_id, thread.parent_id,
+       senderId, senderRole, message_type,
+       content ?? null, media_url ?? null, media_type ?? null,
+       media_size_bytes ?? null, original_filename ?? null,
+       recipientId]
+    );
+    const message = msgRes.rows[0];
+
     setImmediate(async () => {
       try {
-        await publishFirebaseEvent(schoolId, thread_id, msgId);
+        await publishFirebaseEvent(schoolId, thread_id, message.id);
         await sendPushNotification(recipientId, schoolId, {
-          title: `New message`,
-          body: content ? content.slice(0, 80) : `[${message_type}]`,
-          data: { thread_id, message_id: msgId },
+          title: 'New message',
+          body:  content ? content.slice(0, 80) : `[${message_type}]`,
+          data:  { thread_id, message_id: message.id },
         });
-        // SMS is not used for chat — push notifications only (SMS reserved for OTP)
       } catch (e) {
         logger.error('Post-send async error:', e);
       }
@@ -297,11 +295,8 @@ async function sendMessage(req, res) {
 
     res.status(201).json({ data: message });
   } catch (err) {
-    await client.query('ROLLBACK');
     logger.error('sendMessage error:', err);
     res.status(500).json({ error: 'SERVER_ERROR' });
-  } finally {
-    client.release();
   }
 }
 
@@ -312,12 +307,12 @@ async function editMessage(req, res) {
     const { messageId } = req.params;
     const { content } = req.body;
 
-    if (!content || !content.trim()) {
+    if (!content?.trim()) {
       return res.status(400).json({ error: 'INVALID_REQUEST', message: 'content is required.' });
     }
 
-    const msgRes = await query(
-      `SELECT * FROM chat_messages WHERE id = $1 AND school_id = $2 AND sender_id = $3`,
+    const msgRes = await queryEca(
+      `SELECT * FROM "chatRoom_history" WHERE id = $1 AND school_id = $2 AND sender_id = $3`,
       [messageId, schoolId, userId]
     );
     if (msgRes.rows.length === 0) {
@@ -325,27 +320,22 @@ async function editMessage(req, res) {
     }
 
     const msg = msgRes.rows[0];
-    const minutesSinceSent = (Date.now() - new Date(msg.sent_at).getTime()) / 60000;
-    if (minutesSinceSent > 5) {
+    if ((Date.now() - new Date(msg.sent_at).getTime()) / 60000 > 5) {
       return res.status(422).json({
         error: 'EDIT_WINDOW_EXPIRED',
-        message: 'This message can no longer be edited — the 5-minute window has passed.',
+        message: 'Messages can only be edited within 5 minutes of sending.',
       });
     }
-
     if (msg.message_type !== 'text') {
-      return res.status(400).json({
-        error: 'INVALID_REQUEST',
-        message: 'Only text messages can be edited.',
-      });
+      return res.status(400).json({ error: 'INVALID_REQUEST', message: 'Only text messages can be edited.' });
     }
 
-    const updated = await query(
-      `UPDATE chat_messages
-       SET content = $1, is_edited = TRUE, edited_at = NOW(), updated_by = $2, updated_at = NOW()
-       WHERE id = $3
+    const updated = await queryEca(
+      `UPDATE "chatRoom_history"
+       SET content = $1, is_edited = TRUE, edited_at = NOW(), updated_at = NOW()
+       WHERE id = $2
        RETURNING *`,
-      [content.trim(), userId, messageId]
+      [content.trim(), messageId]
     );
 
     res.json({ data: updated.rows[0] });
@@ -361,11 +351,10 @@ async function markSeen(req, res) {
     const { sub: userId, school_id: schoolId } = req.user;
     const { messageId } = req.params;
 
-    await query(
-      `INSERT INTO chat_message_status (message_id, user_id, school_id, status, seen_at)
-       VALUES ($1, $2, $3, 'seen', NOW())
-       ON CONFLICT (message_id, user_id) DO UPDATE
-       SET status = 'seen', seen_at = NOW(), updated_at = NOW()`,
+    await queryEca(
+      `UPDATE "chatRoom_history"
+       SET status = 'seen', seen_at = NOW(), updated_at = NOW()
+       WHERE id = $1 AND recipient_id = $2 AND school_id = $3`,
       [messageId, userId, schoolId]
     );
 
@@ -378,12 +367,11 @@ async function markSeen(req, res) {
 
 // ── POST /chat/broadcast ──────────────────────────────────────────────────────
 async function sendBroadcast(req, res) {
-  const client = await getClient();
   try {
     const { sub: teacherId, school_id: schoolId } = req.user;
     const { class_ids, message_type = 'text', content } = req.body;
 
-    if (!class_ids || !Array.isArray(class_ids) || class_ids.length === 0) {
+    if (!class_ids?.length) {
       return res.status(400).json({ error: 'INVALID_REQUEST', message: 'class_ids array is required.' });
     }
     if (!content && message_type === 'text') {
@@ -391,89 +379,75 @@ async function sendBroadcast(req, res) {
     }
 
     const ctx = await getUserContext(teacherId, schoolId, req.headers.authorization?.slice(7));
-    const parentIds = new Set();
 
+    // Collect student→parent pairs for target classes
+    const targets = [];
     for (const cls of (ctx.classes || [])) {
-      if (class_ids.includes(cls.class_id)) {
+      if (class_ids.includes(cls.class_id || cls.section_id)) {
         for (const student of (cls.students || [])) {
-          for (const pid of (student.parent_ids || [])) {
-            parentIds.add(pid);
+          if (student.parent_user_id) {
+            targets.push({ studentId: student.student_id, parentId: student.parent_user_id });
           }
         }
       }
     }
 
-    await client.query('BEGIN');
+    const broadcastId  = uuidv4();
+    const sectionIds   = JSON.stringify(class_ids);
+    let   sent         = 0;
 
-    const broadcastId = uuidv4();
-    await client.query(
-      `INSERT INTO chat_broadcasts
-         (id, school_id, teacher_id, class_ids, total_parents_targeted, created_by)
-       VALUES ($1, $2, $3, $4, $5, $3)`,
-      [broadcastId, schoolId, teacherId, JSON.stringify(class_ids), parentIds.size]
-    );
+    for (const { studentId, parentId } of targets) {
+      try {
+        const threadId = buildThreadId({
+          schoolId, teacherId, studentId, initiator: 'parent', parentId,
+        });
 
-    const msgId = uuidv4();
-    await client.query(
-      `INSERT INTO chat_messages
-         (id, school_id, thread_id, sender_id, sender_role, message_type,
-          content, is_broadcast, broadcast_id, created_by, updated_by)
-       SELECT $1,$2,t.id,$3,'teacher',$4,$5,TRUE,$6,$3,$3
-       FROM   chat_threads t
-       WHERE  t.teacher_id = $3 AND t.school_id = $2
-       LIMIT  1`,
-      [msgId, schoolId, teacherId, message_type, content, broadcastId]
-    );
+        // Ensure thread anchor exists
+        await queryEca(
+          `INSERT INTO "chatRoom_history"
+             (school_id, thread_id, thread_type, thread_initiator,
+              teacher_id, student_id, parent_id,
+              sender_id, sender_role, message_type, content)
+           VALUES ($1,$2,'broadcast','parent',$3,$4,$5,$3,'teacher','system','__thread_created__')
+           ON CONFLICT (thread_id) WHERE message_type = 'system' DO NOTHING`,
+          [schoolId, threadId, teacherId, studentId, parentId]
+        );
 
-    await client.query('COMMIT');
+        // Insert broadcast message for this recipient
+        await queryEca(
+          `INSERT INTO "chatRoom_history"
+             (school_id, thread_id, thread_type, thread_initiator,
+              teacher_id, student_id, parent_id,
+              sender_id, sender_role, message_type, content,
+              is_broadcast, broadcast_id, section_ids, total_recipients,
+              recipient_id, status)
+           VALUES ($1,$2,'broadcast','parent',$3,$4,$5,
+                  $3,'teacher',$6,$7,
+                  TRUE,$8,$9,$10,
+                  $5,'sent')`,
+          [schoolId, threadId, teacherId, studentId, parentId,
+           message_type, content ?? null,
+           broadcastId, sectionIds, targets.length]
+        );
 
-    setImmediate(async () => {
-      let pushCount = 0;
-
-      for (const parentId of parentIds) {
-        try {
-          await query(
-            `INSERT INTO chat_threads
-               (school_id, thread_type, thread_initiator, parent_id, teacher_id,
-                student_id, broadcast_id, created_by, updated_by)
-             VALUES ($1,'broadcast','parent',$2,$3,
-               (SELECT student_id FROM chat_threads WHERE teacher_id=$3 AND parent_id=$2 LIMIT 1),
-               $4,$3,$3)
-             ON CONFLICT DO NOTHING
-             RETURNING id`,
-            [schoolId, parentId, teacherId, broadcastId]
-          );
-
-          await sendPushNotification(parentId, schoolId, {
-            title: `📢 Class Announcement`,
-            body: content ? content.slice(0, 80) : '[Broadcast]',
-            data: { broadcast_id: broadcastId },
-          });
-          pushCount++;
-          // SMS not used for broadcast — push notifications only
-        } catch (e) {
-          logger.error(`Broadcast delivery failed for parent ${parentId}:`, e);
-        }
+        await sendPushNotification(parentId, schoolId, {
+          title: '📢 Class Announcement',
+          body:  content ? content.slice(0, 80) : '[Broadcast]',
+          data:  { broadcast_id: broadcastId },
+        });
+        sent++;
+      } catch (e) {
+        logger.error(`Broadcast delivery failed for parent ${parentId}:`, e);
       }
-
-      await query(
-        `UPDATE chat_broadcasts
-         SET push_sent_count=$1, status=$2, updated_at=NOW()
-         WHERE id=$3`,
-        [pushCount, 'completed', broadcastId]
-      );
-    });
+    }
 
     res.status(202).json({
-      data: { broadcast_id: broadcastId, total_parents: parentIds.length },
-      message: 'Broadcast queued — delivery in progress.',
+      data: { broadcast_id: broadcastId, total_parents: targets.length, sent },
+      message: 'Broadcast sent.',
     });
   } catch (err) {
-    await client.query('ROLLBACK');
     logger.error('sendBroadcast error:', err);
     res.status(500).json({ error: 'SERVER_ERROR' });
-  } finally {
-    client.release();
   }
 }
 
@@ -481,13 +455,16 @@ async function sendBroadcast(req, res) {
 async function getBroadcast(req, res) {
   try {
     const { school_id: schoolId } = req.user;
-    const result = await query(
-      `SELECT * FROM chat_broadcasts WHERE id = $1 AND school_id = $2`,
+    const result = await queryEca(
+      `SELECT broadcast_id, section_ids, total_recipients, content,
+              COUNT(*)::int AS sent_count, MIN(sent_at) AS sent_at
+       FROM   "chatRoom_history"
+       WHERE  broadcast_id = $1 AND school_id = $2 AND is_broadcast = TRUE
+       GROUP  BY broadcast_id, section_ids, total_recipients, content
+       LIMIT  1`,
       [req.params.broadcastId, schoolId]
     );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'NOT_FOUND' });
-    }
+    if (result.rows.length === 0) return res.status(404).json({ error: 'NOT_FOUND' });
     res.json({ data: result.rows[0] });
   } catch (err) {
     res.status(500).json({ error: 'SERVER_ERROR' });
@@ -505,30 +482,25 @@ async function search(req, res) {
     }
 
     let sql, params;
-
     if (scope === 'global' || !thread_id) {
-      sql = `SELECT m.*, t.id AS thread_id
-             FROM   chat_messages m
-             JOIN   chat_threads t ON t.id = m.thread_id
-             WHERE  m.school_id = $1
-               AND  (t.parent_id = $2 OR t.teacher_id = $2 OR t.student_id = $2)
-               AND  to_tsvector('english', coalesce(m.content,'')) @@ plainto_tsquery('english', $3)
-             ORDER  BY m.sent_at DESC
-             LIMIT  50`;
+      sql = `SELECT * FROM "chatRoom_history"
+             WHERE  school_id = $1
+               AND  (teacher_id = $2 OR parent_id = $2 OR student_id = $2)
+               AND  message_type != 'system' AND is_deleted = FALSE
+               AND  to_tsvector('english', COALESCE(content,'')) @@ plainto_tsquery('english', $3)
+             ORDER  BY sent_at DESC LIMIT 50`;
       params = [schoolId, userId, q.trim()];
     } else {
-      sql = `SELECT m.*
-             FROM   chat_messages m
-             JOIN   chat_threads t ON t.id = m.thread_id
-             WHERE  m.thread_id = $1 AND m.school_id = $2
-               AND  (t.parent_id = $3 OR t.teacher_id = $3 OR t.student_id = $3)
-               AND  to_tsvector('english', coalesce(m.content,'')) @@ plainto_tsquery('english', $4)
-             ORDER  BY m.sent_at DESC
-             LIMIT  50`;
+      sql = `SELECT * FROM "chatRoom_history"
+             WHERE  thread_id = $1 AND school_id = $2
+               AND  (teacher_id = $3 OR parent_id = $3 OR student_id = $3)
+               AND  message_type != 'system' AND is_deleted = FALSE
+               AND  to_tsvector('english', COALESCE(content,'')) @@ plainto_tsquery('english', $4)
+             ORDER  BY sent_at DESC LIMIT 50`;
       params = [thread_id, schoolId, userId, q.trim()];
     }
 
-    const result = await query(sql, params);
+    const result = await queryEca(sql, params);
     res.json({ data: result.rows });
   } catch (err) {
     logger.error('search error:', err);
@@ -536,17 +508,7 @@ async function search(req, res) {
   }
 }
 
-// ── PUT /chat/threads/:threadId/mute ─────────────────────────────────────────
-async function muteThread(req, res) {
-  res.json({ success: true });
-}
-
-// ── PUT /chat/settings/mute-all ───────────────────────────────────────────────
-async function muteAll(req, res) {
-  res.json({ success: true });
-}
-
-// ── GET /chat/me ─────────────────────────────────────────────────────────────
+// ── GET /chat/me ──────────────────────────────────────────────────────────────
 async function getMe(req, res) {
   try {
     const { sub: userId, school_id: schoolId } = req.user;
@@ -569,13 +531,13 @@ async function getChildren(req, res) {
   }
 }
 
-// ── GET /chat/teachers ────────────────────────────────────────────────────────
+// ── GET /chat/teachers (for a parent's child) ─────────────────────────────────
 async function getTeachersForChild(req, res) {
   try {
     const { sub: userId, school_id: schoolId } = req.user;
     const { student_id } = req.query;
     const ctx = await getUserContext(userId, schoolId, req.headers.authorization?.slice(7));
-    const child = (ctx.children || []).find((c) => c.student_id === student_id);
+    const child = (ctx.children || []).find(c => c.student_id === student_id);
     res.json({ data: child ? child.teachers : [] });
   } catch (err) {
     res.status(500).json({ error: 'SERVER_ERROR' });
@@ -597,18 +559,24 @@ async function getStudentTeachers(req, res) {
 async function getUnreadCount(req, res) {
   try {
     const { sub: userId, school_id: schoolId } = req.user;
-    const result = await query(
-      `SELECT COUNT(*) AS total
-       FROM   chat_message_status s
-       JOIN   chat_messages m ON m.id = s.message_id
-       WHERE  s.user_id = $1 AND m.school_id = $2 AND s.status != 'seen'`,
+    const result = await queryEca(
+      `SELECT COUNT(*)::int AS total
+       FROM   "chatRoom_history"
+       WHERE  recipient_id = $1 AND school_id = $2
+              AND status != 'seen' AND is_deleted = FALSE AND message_type != 'system'`,
       [userId, schoolId]
     );
-    res.json({ data: { unread_count: parseInt(result.rows[0].total) } });
+    res.json({ data: { unread_count: result.rows[0].total } });
   } catch (err) {
     res.status(500).json({ error: 'SERVER_ERROR' });
   }
 }
+
+// ── PUT /chat/threads/:threadId/mute ─────────────────────────────────────────
+async function muteThread(_req, res) { res.json({ success: true }); }
+
+// ── PUT /chat/settings/mute-all ───────────────────────────────────────────────
+async function muteAll(_req, res) { res.json({ success: true }); }
 
 module.exports = {
   getMe,

@@ -9,9 +9,11 @@ import '../../widgets/common/shimmer_list.dart';
 import '../../widgets/common/empty_state.dart';
 import '../../widgets/common/error_state.dart';
 import '../../models/chat_thread.dart';
+import '../auth/teacher_parent_login_screen.dart';
 import '../chat_thread_screen.dart';
-import 'roll_number_search_screen.dart';
 import 'broadcast_screen.dart';
+import 'contact_picker_screen.dart';
+import 'roll_number_search_screen.dart';
 
 class TeacherHomeScreen extends StatefulWidget {
   const TeacherHomeScreen({super.key});
@@ -33,6 +35,78 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ThreadsProvider>().loadThreads();
     });
+  }
+
+  Future<void> _logout() async {
+    await AuthService.instance.clearSession();
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const TeacherParentLoginScreen()),
+      (_) => false,
+    );
+  }
+
+  void _showNewMessageMenu() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.divider,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 16),
+            ListTile(
+              leading: Container(
+                width: 44, height: 44,
+                decoration: BoxDecoration(
+                  color: AppColors.primarySurface,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.message_rounded, color: AppColors.primary),
+              ),
+              title: const Text('New Message',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: const Text('Start a direct chat with a student or parent'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => const ContactPickerScreen()));
+              },
+            ),
+            ListTile(
+              leading: Container(
+                width: 44, height: 44,
+                decoration: BoxDecoration(
+                  color: AppColors.accentLight,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.campaign_rounded, color: AppColors.accent),
+              ),
+              title: const Text('Broadcast',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: const Text('Send an announcement to an entire class'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => const BroadcastScreen()));
+              },
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -64,7 +138,7 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen>
       elevation: 0,
       title: Row(
         children: [
-          // Education Care Africa logo
+          // ECareAfrica logo
           Container(
             width: 36,
             height: 36,
@@ -98,7 +172,7 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen>
               if (name != null)
                 Text(name,
                     style: TextStyle(
-                        color: AppColors.white.withOpacity(0.75), fontSize: 11)),
+                        color: AppColors.white.withValues(alpha:0.75), fontSize: 11)),
             ],
           ),
         ],
@@ -135,6 +209,11 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen>
           icon: const Icon(Icons.refresh_rounded, color: AppColors.white),
           onPressed: () => context.read<ThreadsProvider>().loadThreads(),
         ),
+        IconButton(
+          icon: const Icon(Icons.logout_rounded, color: AppColors.white),
+          tooltip: 'Logout',
+          onPressed: _logout,
+        ),
       ],
     );
   }
@@ -154,11 +233,11 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen>
               decoration: InputDecoration(
                 hintText: 'Search conversations…',
                 hintStyle:
-                    TextStyle(color: AppColors.white.withOpacity(0.5)),
+                    TextStyle(color: AppColors.white.withValues(alpha:0.5)),
                 prefixIcon: Icon(Icons.search,
-                    color: AppColors.white.withOpacity(0.7)),
+                    color: AppColors.white.withValues(alpha:0.7)),
                 filled: true,
-                fillColor: AppColors.white.withOpacity(0.12),
+                fillColor: AppColors.white.withValues(alpha:0.12),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide.none,
@@ -172,7 +251,7 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen>
             controller: _tabController,
             indicatorColor: AppColors.accent,
             labelColor: AppColors.white,
-            unselectedLabelColor: AppColors.white.withOpacity(0.5),
+            unselectedLabelColor: AppColors.white.withValues(alpha:0.5),
             labelStyle: const TextStyle(
                 fontWeight: FontWeight.w600, fontSize: 13),
             tabs: const [
@@ -203,15 +282,11 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen>
 
   Widget _buildFab() {
     return FloatingActionButton.extended(
-      onPressed: () => Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const BroadcastScreen()),
-      ),
+      onPressed: _showNewMessageMenu,
       backgroundColor: AppColors.accent,
       foregroundColor: AppColors.primaryDark,
-      icon: const Icon(Icons.campaign_rounded),
-      label: const Text('Broadcast',
-          style: TextStyle(fontWeight: FontWeight.w600)),
+      icon: const Icon(Icons.add_rounded),
+      label: const Text('New', style: TextStyle(fontWeight: FontWeight.w600)),
     ).animate().scale(
           begin: const Offset(0, 0),
           end: const Offset(1, 1),

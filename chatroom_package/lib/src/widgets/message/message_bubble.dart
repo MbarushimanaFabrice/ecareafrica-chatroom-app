@@ -59,7 +59,7 @@ class MessageBubble extends StatelessWidget {
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.06),
+                      color: Colors.black.withValues(alpha:0.06),
                       blurRadius: 4,
                       offset: const Offset(0, 2),
                     ),
@@ -105,7 +105,7 @@ class MessageBubble extends StatelessWidget {
                             style: TextStyle(
                               fontSize: 10,
                               color: message.isMe
-                                  ? AppColors.white.withOpacity(0.6)
+                                  ? AppColors.white.withValues(alpha:0.6)
                                   : AppColors.textHint,
                               fontStyle: FontStyle.italic,
                             ),
@@ -115,7 +115,7 @@ class MessageBubble extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 10,
                             color: message.isMe
-                                ? AppColors.white.withOpacity(0.7)
+                                ? AppColors.white.withValues(alpha:0.7)
                                 : AppColors.textHint,
                           ),
                         ),
@@ -273,7 +273,7 @@ class _ImageContent extends StatelessWidget {
               style: TextStyle(
                 fontSize: 11,
                 color: message.isMe
-                    ? AppColors.white.withOpacity(0.7)
+                    ? AppColors.white.withValues(alpha:0.7)
                     : AppColors.textHint,
               ),
             ),
@@ -299,7 +299,7 @@ class _DocumentContent extends StatelessWidget {
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
             color: message.isMe
-                ? AppColors.white.withOpacity(0.2)
+                ? AppColors.white.withValues(alpha:0.2)
                 : AppColors.primarySurface,
             borderRadius: BorderRadius.circular(8),
           ),
@@ -327,7 +327,7 @@ class _DocumentContent extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 11,
                     color: message.isMe
-                        ? AppColors.white.withOpacity(0.7)
+                        ? AppColors.white.withValues(alpha:0.7)
                         : AppColors.textHint,
                   ),
                 ),
@@ -363,7 +363,7 @@ class _VoiceContent extends StatelessWidget {
                 width: 120,
                 decoration: BoxDecoration(
                   color: message.isMe
-                      ? AppColors.white.withOpacity(0.2)
+                      ? AppColors.white.withValues(alpha:0.2)
                       : AppColors.primarySurface,
                   borderRadius: BorderRadius.circular(4),
                 ),
@@ -379,7 +379,7 @@ class _VoiceContent extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 11,
                   color: message.isMe
-                      ? AppColors.white.withOpacity(0.7)
+                      ? AppColors.white.withValues(alpha:0.7)
                       : AppColors.textHint,
                 ),
               ),

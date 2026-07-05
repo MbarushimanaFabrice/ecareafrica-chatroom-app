@@ -70,39 +70,56 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
               // Header
               Expanded(
                 flex: 2,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                child: Stack(
                   children: [
-                    Container(
-                      width: 90,
-                      height: 90,
-                      decoration: BoxDecoration(
-                        color: AppColors.white.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(24),
+                    // Back button
+                    Align(
+                      alignment: Alignment.topLeft,
+                      child: IconButton(
+                        icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                            color: AppColors.white),
+                        tooltip: 'Back',
+                        onPressed: () => Navigator.pop(context),
                       ),
-                      child: const Icon(Icons.school_rounded,
-                          size: 48, color: AppColors.white),
-                    )
-                        .animate()
-                        .scale(duration: 500.ms, curve: Curves.elasticOut),
-                    const SizedBox(height: 20),
-                    const Text(
-                      'Student Login',
-                      style: TextStyle(
-                        color: AppColors.white,
-                        fontSize: 26,
-                        fontWeight: FontWeight.w700,
+                    ),
+                    // Centred logo + title
+                    Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 90,
+                            height: 90,
+                            decoration: BoxDecoration(
+                              color: AppColors.white.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(24),
+                            ),
+                            child: const Icon(Icons.school_rounded,
+                                size: 48, color: AppColors.white),
+                          )
+                              .animate()
+                              .scale(duration: 500.ms, curve: Curves.elasticOut),
+                          const SizedBox(height: 20),
+                          const Text(
+                            'Student Login',
+                            style: TextStyle(
+                              color: AppColors.white,
+                              fontSize: 26,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ).animate(delay: 200.ms).fadeIn().slideY(begin: 0.2),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Enter your Student ID to receive\nan OTP on your parent\'s phone',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: AppColors.white.withValues(alpha: 0.75),
+                              fontSize: 14,
+                            ),
+                          ).animate(delay: 300.ms).fadeIn(),
+                        ],
                       ),
-                    ).animate(delay: 200.ms).fadeIn().slideY(begin: 0.2),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Enter your Student ID to receive\nan OTP on your parent\'s phone',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: AppColors.white.withOpacity(0.75),
-                        fontSize: 14,
-                      ),
-                    ).animate(delay: 300.ms).fadeIn(),
+                    ),
                   ],
                 ),
               ),
@@ -122,7 +139,7 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Student ID / Enrollment Number',
+                        'Roll Number',
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
@@ -135,7 +152,7 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
                         keyboardType: TextInputType.text,
                         textCapitalization: TextCapitalization.characters,
                         decoration: const InputDecoration(
-                          hintText: 'e.g. STU-2024-001',
+                          hintText: 'e.g. ECA-2025-001',
                           prefixIcon: Icon(Icons.badge_rounded,
                               color: AppColors.primary),
                         ),
@@ -147,10 +164,10 @@ class _StudentLoginScreenState extends State<StudentLoginScreen> {
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: AppColors.error.withOpacity(0.08),
+                            color: AppColors.error.withValues(alpha: 0.08),
                             borderRadius: BorderRadius.circular(10),
                             border: Border.all(
-                                color: AppColors.error.withOpacity(0.3)),
+                                color: AppColors.error.withValues(alpha: 0.3)),
                           ),
                           child: Row(
                             children: [

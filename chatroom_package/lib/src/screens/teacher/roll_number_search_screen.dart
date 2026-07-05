@@ -67,16 +67,16 @@ class _RollNumberSearchScreenState extends State<RollNumberSearchScreen> {
               decoration: InputDecoration(
                 hintText: 'Enter student roll number…',
                 hintStyle:
-                    TextStyle(color: AppColors.white.withOpacity(0.5)),
+                    TextStyle(color: AppColors.white.withValues(alpha:0.5)),
                 prefixIcon: Icon(Icons.search,
-                    color: AppColors.white.withOpacity(0.7)),
+                    color: AppColors.white.withValues(alpha:0.7)),
                 suffixIcon: IconButton(
                   icon: const Icon(Icons.send_rounded,
                       color: AppColors.accent),
                   onPressed: () => _search(_controller.text),
                 ),
                 filled: true,
-                fillColor: AppColors.white.withOpacity(0.12),
+                fillColor: AppColors.white.withValues(alpha:0.12),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide.none,

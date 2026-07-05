@@ -1,9 +1,9 @@
-# Netrack Chatroom Feature
-### Education Care Africa — Parent · Teacher · Student Communication Module
+# ECareAfrica Chatroom
+### Parent · Teacher · Student Communication Module
 
-> **PRD Version:** 2.4 — Microservice Architecture  
-> **Status:** Development Ready  
-> **Pilot Duration:** 2-Day Live Demo
+> **Status:** Active Development  
+> **Database:** ECareAfrica_db (single PostgreSQL database — no separate chat DB)  
+> **Architecture:** Flutter package + Node.js/Express REST API
 
 ---
 
@@ -14,87 +14,77 @@
 3. [Folder Structure](#3-folder-structure)
 4. [Color System & Design](#4-color-system--design)
 5. [Flutter Package — Setup](#5-flutter-package--setup)
-6. [Node.js Backend — Setup](#6-nodejs-backend--setup)
-7. [PostgreSQL Database — Setup](#7-postgresql-database--setup)
-8. [Firebase — Setup](#8-firebase--setup)
-9. [Running the System (Day-to-Day)](#9-running-the-system-day-to-day)
-10. [Test Shell — Development Workflow](#10-test-shell--development-workflow)
-11. [Integrating into the Main Netrack App](#11-integrating-into-the-main-netrack-app)
-12. [API Reference](#12-api-reference)
-13. [Feature Checklist](#13-feature-checklist)
-14. [Troubleshooting](#14-troubleshooting)
+6. [Node.js Backend — Server Configuration](#6-nodejs-backend--server-configuration)
+7. [Database Setup](#7-database-setup)
+8. [Firebase Setup](#8-firebase-setup)
+9. [Running the System](#9-running-the-system)
+10. [API Reference](#10-api-reference)
+11. [Database Schema](#11-database-schema)
+12. [Feature Checklist](#12-feature-checklist)
+13. [Troubleshooting](#13-troubleshooting)
 
 ---
 
 ## 1. Project Overview
 
-The Netrack Chatroom is a **fully independent microservice** that adds real-time
-parent–teacher–student messaging to the Netrack Education ERP Flutter app.
+The ECareAfrica Chatroom is a **fully independent feature module** that adds real-time parent–teacher–student messaging, built on top of the existing `ECareAfrica_db` PostgreSQL database.
 
 | What | Detail |
 |------|--------|
-| Flutter package | Self-contained — host app passes a JWT and gets a full chatroom |
-| Backend | Node.js REST API (Express) — independent process, own database |
-| Database | PostgreSQL — 8 dedicated tables, zero shared tables with main system |
-| Real-time | Firebase Realtime Database (event signals only — no message content) |
+| Flutter package | `chatroom_package` — self-contained; host app passes a JWT |
+| Backend | Node.js REST API (Express) — `chat_service/` — port 3000 |
+| Database | **ECareAfrica_db** — shared with the main system; chatroom adds 3 tables |
+| Real-time | Firebase Realtime Database (event signals only — no message content stored) |
 | Push | Firebase Cloud Messaging (FCM) |
-| SMS | Always-on via existing Netrack SMS gateway |
-| User data | Fetched once via API bridge from main Netrack system, cached 30 min |
+| SMS | OTP delivery via configured SMS gateway |
+| Auth | OTP-based (phone + password → OTP → JWT) |
 
 ### Who uses it
 
-| Role | How they log in | What they can do |
-|------|----------------|-----------------|
-| **Parent** | JWT from main Netrack app | Chat with child's teachers, receive broadcasts |
-| **Teacher** | JWT from main Netrack app | Chat with parents, search by roll number, broadcast to class |
-| **Student** | Student ID + OTP to parent's phone | Chat with their subject teachers only |
+| Role | Login flow | What they can do |
+|------|-----------|-----------------|
+| **Teacher** | Phone + password → OTP SMS → JWT | View threads, chat with parents/students, broadcast to class, roll-number search |
+| **Parent** | Phone + password → OTP SMS → JWT | Select child, chat with child's teachers, receive broadcasts |
+| **Student** | Roll number → OTP to parent's phone → JWT | Chat with their enrolled subject teachers only |
 
 ---
 
 ## 2. Architecture Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Flutter Mobile App                           │
-│                                                                 │
-│   ┌──────────────────────────────────────────────────────────┐  │
-│   │              ChatroomWidget (your package)               │  │
-│   │  Parent screens │ Teacher screens │ Student screens      │  │
-│   │  MessagesProvider │ ThreadsProvider │ PresenceService    │  │
-│   └──────────┬───────────────────────────────┬───────────────┘  │
-│              │ REST API calls                │ Firebase events  │
-└──────────────┼───────────────────────────────┼──────────────────┘
-               │                               │
-               ▼                               ▼
-┌──────────────────────────┐    ┌──────────────────────────────┐
-│   Chat Service (Node.js) │    │  Firebase Realtime Database  │
-│   Port 3000              │    │  /schools/{id}/threads/{id}  │
-│                          │    │  /schools/{id}/presence/{id} │
-│  ┌────────────────────┐  │    └──────────────────────────────┘
-│  │  JWT Auth          │  │
-│  │  Chat Controller   │  │    ┌──────────────────────────────┐
-│  │  Broadcast Queue   │  │    │  Firebase Cloud Messaging    │
-│  │  SMS Service       │  │    │  Push notifications          │
-│  │  Presence Sync     │  │    └──────────────────────────────┘
-│  └────────────────────┘  │
-│             │             │    ┌──────────────────────────────┐
-│             ▼             │    │  SMS Gateway                 │
-│  ┌────────────────────┐  │───▶│  Always-on delivery          │
-│  │  PostgreSQL DB     │  │    └──────────────────────────────┘
-│  │  (chat_* tables)   │  │
-│  └────────────────────┘  │    ┌──────────────────────────────┐
-│             │             │    │  Main Netrack API            │
-│             ▼             │    │  GET /api/internal/          │
-│  ┌────────────────────┐  │◀───│  user-context (bridge)       │
-│  │  Redis Cache       │  │    │  (called once, cached 30min) │
-│  │  (user context)    │  │    └──────────────────────────────┘
-│  └────────────────────┘  │
-└──────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                     Flutter Mobile App                           │
+│                                                                  │
+│   ┌───────────────────────────────────────────────────────────┐  │
+│   │              chatroom_package                             │  │
+│   │  Splash → Login → Teacher/Parent/Student screens          │  │
+│   │  ThreadsProvider │ MessagesProvider │ PresenceService     │  │
+│   └──────────────┬─────────────────────────────┬──────────────┘  │
+│                  │ REST API calls              │ Firebase events  │
+└──────────────────┼─────────────────────────────┼─────────────────┘
+                   │                             │
+                   ▼                             ▼
+┌────────────────────────────┐   ┌────────────────────────────────┐
+│  chat_service (Node.js)    │   │  Firebase Realtime Database    │
+│  Port 3000                 │   │  /schools/{id}/threads/{id}    │
+│                            │   │  /schools/{id}/presence/{id}   │
+│  JWT Auth middleware        │   └────────────────────────────────┘
+│  chat.controller.js         │
+│  auth.controller.js         │   ┌────────────────────────────────┐
+│  status.controller.js       │   │  Firebase Cloud Messaging      │
+│  notification.service.js    │   │  Push notifications            │
+│  user_context.service.js    │   └────────────────────────────────┘
+│             │               │
+│             ▼               │   ┌────────────────────────────────┐
+│   ECareAfrica_db             │──▶│  SMS Gateway                   │
+│   (PostgreSQL)               │   │  OTP delivery                  │
+│   chatRoom_history           │   └────────────────────────────────┘
+│   chatroom_active_status     │
+│   chatroom_device_tokens     │
+└────────────────────────────┘
 ```
 
-**Key principle:** Firebase carries only a `message_id` signal. All message
-content lives in PostgreSQL. The chat service never touches the main Netrack
-database directly.
+**Key principle:** Firebase carries only a `message_id` signal. All message content lives exclusively in `chatRoom_history`. The chat service reads user/student/parent data directly from ECareAfrica_db — no separate API bridge needed.
 
 ---
 
@@ -103,82 +93,102 @@ database directly.
 ```
 ChatRoom/
 │
-├── chatroom_package/          ← Flutter package (the real deliverable)
+├── chatroom_package/              ← Flutter package (the deliverable)
 │   ├── lib/
-│   │   ├── chatroom.dart      ← Public API export
+│   │   ├── chatroom.dart          ← Public API exports
 │   │   └── src/
-│   │       ├── theme/         ← AppColors, AppTheme (brand colors)
-│   │       ├── models/        ← UserContext, ChatThread, ChatMessage
-│   │       ├── services/      ← API, Auth, Presence, Notifications
-│   │       ├── providers/     ← ThreadsProvider, MessagesProvider
+│   │       ├── theme/             ← AppColors, AppTheme
+│   │       ├── models/            ← UserContext, ChatThread, ChatMessage
+│   │       ├── services/          ← ApiService, AuthService, PresenceService
+│   │       ├── providers/         ← ThreadsProvider, MessagesProvider
 │   │       ├── screens/
-│   │       │   ├── splash_screen.dart
-│   │       │   ├── chat_thread_screen.dart
-│   │       │   ├── parent/    ← ParentHome, ChildSelection, TeacherList
-│   │       │   ├── teacher/   ← TeacherHome, RollNumberSearch, Broadcast
-│   │       │   └── student/   ← StudentLogin, OtpScreen, StudentHome
+│   │       │   ├── splash_screen.dart          ← ECareAfrica branding + animation
+│   │       │   ├── login_screen.dart           ← Entry: "Who are you?" selector
+│   │       │   ├── chat_thread_screen.dart     ← Message view (all roles)
+│   │       │   ├── auth/
+│   │       │   │   └── teacher_parent_login_screen.dart  ← Phone + password + OTP
+│   │       │   ├── parent/
+│   │       │   │   ├── child_selection_screen.dart
+│   │       │   │   ├── parent_home_screen.dart
+│   │       │   │   └── teacher_list_screen.dart
+│   │       │   ├── teacher/
+│   │       │   │   ├── teacher_home_screen.dart
+│   │       │   │   ├── contact_picker_screen.dart
+│   │       │   │   ├── broadcast_screen.dart
+│   │       │   │   └── roll_number_search_screen.dart
+│   │       │   └── student/
+│   │       │       ├── student_login_screen.dart   ← Roll number entry (back arrow)
+│   │       │       ├── student_otp_screen.dart     ← 6-digit OTP input
+│   │       │       └── student_home_screen.dart
 │   │       └── widgets/
-│   │           ├── chatroom_widget.dart   ← Entry point widget
-│   │           ├── common/    ← ThreadListTile, OnlineDot, Shimmer, etc.
-│   │           └── message/   ← MessageBubble, InputBar, TypingIndicator
+│   │           ├── common/        ← ThreadListTile, EmptyState, etc.
+│   │           └── message/       ← MessageBubble, MessageInputBar, TypingIndicator
 │   └── pubspec.yaml
 │
-├── chat_service/              ← Node.js REST API (independent microservice)
+├── chat_service/                  ← Node.js REST API
 │   ├── src/
-│   │   ├── server.js          ← Express app bootstrap
+│   │   ├── server.js              ← Express bootstrap, connects to ECareAfrica_db
 │   │   ├── db/
-│   │   │   ├── pool.js        ← PostgreSQL connection pool
-│   │   │   └── migrate.js     ← Creates all 8 tables + indexes
+│   │   │   ├── ecafrica_pool.js   ← Single PostgreSQL pool for ECareAfrica_db
+│   │   │   └── migrate.js         ← Creates chatRoom_history + 2 helper tables
 │   │   ├── middleware/
-│   │   │   └── auth.middleware.js   ← JWT validation, role guards
-│   │   ├── routes/            ← chat, auth, student, admin, dev routes
-│   │   ├── controllers/       ← chat, auth, status, student controllers
+│   │   │   └── auth.middleware.js ← JWT validation, requireRole guard
+│   │   ├── routes/
+│   │   │   ├── auth.routes.js     ← /auth/*
+│   │   │   ├── chat.routes.js     ← /chat/*
+│   │   │   └── student.routes.js  ← /students/*
+│   │   ├── controllers/
+│   │   │   ├── auth.controller.js
+│   │   │   ├── chat.controller.js
+│   │   │   ├── status.controller.js
+│   │   │   └── student.controller.js
 │   │   └── services/
-│   │       ├── firebase.service.js      ← Firebase Admin SDK
-│   │       ├── notification.service.js  ← FCM push dispatch
-│   │       ├── sms.service.js           ← SMS gateway integration
-│   │       └── user_context.service.js  ← Bridge + cache logic
-│   ├── mock-data/             ← JSON files for USE_MOCK_BRIDGE=true
-│   ├── .env.example           ← Copy to .env and fill in values
+│   │       ├── firebase.service.js
+│   │       ├── notification.service.js  ← FCM via chatroom_device_tokens
+│   │       ├── sms.service.js
+│   │       └── user_context.service.js  ← Queries ECareAfrica_db directly
+│   ├── scripts/
+│   │   ├── seed-ecafrica.js            ← Seeds test teacher + parent + students
+│   │   └── test_chat_history.js        ← End-to-end API + DB test
+│   ├── logs/
+│   │   ├── combined.log
+│   │   └── error.log
+│   ├── .env                       ← Local config (never commit)
+│   ├── .env.example               ← Template — copy to .env
 │   └── package.json
 │
-├── test_shell/                ← Throwaway Flutter app for development testing
+├── test_shell/                    ← Throwaway Flutter app for development
 │   ├── lib/
-│   │   ├── main.dart          ← Role picker, launches ChatroomWidget
-│   │   ├── mock_users.dart    ← Hardcoded test users
+│   │   ├── main.dart              ← Role picker, launches chatroom
 │   │   └── firebase_options.dart  ← Replace with your Firebase config
 │   └── pubspec.yaml
 │
-└── README.md                  ← This file
+└── README.md
 ```
 
 ---
 
 ## 4. Color System & Design
 
-All colors are extracted from the **Education Care Africa logo**.
+All colors are extracted from the **ECareAfrica logo**.
 
 | Token | Hex | Usage |
 |-------|-----|-------|
 | `primaryDark` | `#1A237E` | AppBar, headers, primary text |
 | `primary` | `#1565C0` | Buttons, sent bubbles, active states |
 | `primaryLight` | `#2196F3` | Accents, online indicators |
-| `accent` | `#F9A825` | FAB, unread badges, broadcast labels (logo gold) |
-| `success` | `#388E3C` | Online dot (logo green) |
+| `accent` | `#F9A825` | FAB, unread badges, broadcast labels |
+| `success` | `#388E3C` | Online presence dot |
 | `background` | `#F5F7FA` | Screen backgrounds |
 | `surface` | `#FFFFFF` | Cards, received bubbles |
 
-**Design practices applied:**
-- `RichText` / `Text` with adaptive `TextStyle` scaling
-- `Flexible` + `Expanded` in all row/column layouts
-- `Flex` for proportional space distribution
-- `SplashScreen` with animated gradient + elastic logo scale
-- Material 3 `useMaterial3: true`
+**Design notes:**
+- `withValues(alpha: x)` used everywhere — `withOpacity` is deprecated in Flutter 3.x
+- Material 3 (`useMaterial3: true`)
 - `flutter_animate` for entrance animations (fadeIn, slideX, scale)
-- `Shimmer` skeleton loaders on every list
-- Minimum 48×48dp touch targets on all interactive elements
-- `SafeArea` on all screens
-- `MediaQuery` for adaptive padding
+- Shimmer skeleton loaders on all lists
+- `SafeArea` + `MediaQuery` adaptive padding on all screens
+- All interactive elements ≥ 48×48dp touch target
 
 ---
 
@@ -186,38 +196,36 @@ All colors are extracted from the **Education Care Africa logo**.
 
 ### Prerequisites
 - Flutter SDK ≥ 3.10.0
-- Android Studio / VS Code with Flutter plugin
 - Android emulator (API 24+) or physical device
 
-### Step 1 — Install dependencies
+### Install dependencies
 
 ```bash
 cd chatroom_package
 flutter pub get
+
+cd ../test_shell
+flutter pub get
 ```
 
-### Step 2 — Add to your app's pubspec.yaml
+### Add to your app's pubspec.yaml
 
 ```yaml
 dependencies:
-  netrack_chatroom:
+  ecafrica_chatroom:
     path: ../chatroom_package   # local during development
-    # OR for production:
-    # git:
-    #   url: https://github.com/netrack/chatroom_package
-    #   ref: v1.0.0
 ```
 
-### Step 3 — Initialize in main.dart
+### Initialize in main.dart
 
 ```dart
-import 'package:netrack_chatroom/chatroom.dart';
+import 'package:ecafrica_chatroom/chatroom.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await ChatroomService.initialize(
-    apiBaseUrl: 'https://chat.netrack.com',       // your chat service URL
+    apiBaseUrl: 'http://10.0.2.2:3000',  // Android emulator → localhost
     firebaseOptions: DefaultFirebaseOptions.currentPlatform,
   );
 
@@ -225,57 +233,26 @@ void main() async {
 }
 ```
 
-### Step 4 — Launch the chatroom (10 lines total)
-
-```dart
-// From anywhere in the main app — bottom nav, button, etc.
-Navigator.push(
-  context,
-  MaterialPageRoute(
-    builder: (_) => ChatroomWidget(
-      userToken: authProvider.currentJwt,   // JWT from your auth system
-      schoolId: authProvider.schoolId,
-      userRole: authProvider.role,          // 'parent' | 'teacher' | 'student'
-    ),
-  ),
-);
-```
-
-That is all the main app needs to write. The package handles everything else.
-
-### Android — build.gradle minimum SDK
+### Android — minimum SDK
 
 In `android/app/build.gradle`:
 ```gradle
 android {
     defaultConfig {
-        minSdkVersion 24    // Android 7.0 — required by flutter_sound
+        minSdkVersion 24
         targetSdkVersion 34
     }
 }
 ```
 
-### iOS — Info.plist permissions
-
-Add to `ios/Runner/Info.plist`:
-```xml
-<key>NSMicrophoneUsageDescription</key>
-<string>Netrack needs microphone access to record voice messages.</string>
-<key>NSPhotoLibraryUsageDescription</key>
-<string>Netrack needs photo library access to send images.</string>
-<key>NSCameraUsageDescription</key>
-<string>Netrack needs camera access to take photos.</string>
-```
-
 ---
 
-## 6. Node.js Backend — Setup
+## 6. Node.js Backend — Server Configuration
 
 ### Prerequisites
 - Node.js ≥ 18.0.0
 - npm ≥ 9.0.0
-- PostgreSQL ≥ 14
-- Redis (optional for pilot — in-memory fallback works)
+- PostgreSQL ≥ 14 with ECareAfrica_db already created and seeded
 
 ### Step 1 — Install dependencies
 
@@ -284,42 +261,70 @@ cd chat_service
 npm install
 ```
 
-### Step 2 — Configure environment
+### Step 2 — Create and configure `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` and fill in:
+Edit `.env` with your values:
 
-| Variable | What to put |
-|----------|-------------|
-| `DB_HOST` | Your PostgreSQL host (e.g. `localhost`) |
-| `DB_NAME` | `netrack_chat` |
-| `DB_USER` | Your PostgreSQL user |
-| `DB_PASSWORD` | Your PostgreSQL password |
-| `JWT_SECRET` | **Must match** the secret used by the main Netrack auth system |
-| `FIREBASE_PROJECT_ID` | Your Firebase project ID |
-| `FIREBASE_CLIENT_EMAIL` | Firebase service account email |
-| `FIREBASE_PRIVATE_KEY` | Firebase service account private key |
-| `FIREBASE_DATABASE_URL` | `https://your-project-default-rtdb.firebaseio.com` |
-| `CHAT_SERVICE_KEY` | A strong random secret shared with the main Netrack system |
-| `SMS_GATEWAY_URL` | Your SMS provider endpoint |
-| `SMS_GATEWAY_API_KEY` | Your SMS provider API key |
-| `USE_MOCK_BRIDGE` | `true` during development, `false` in production |
+```env
+# ── Node ──────────────────────────────────────────────────────────
+NODE_ENV=development
+PORT=3000
+
+# ── ECareAfrica PostgreSQL (single database) ──────────────────────
+ECAFRICA_DB_HOST=localhost
+ECAFRICA_DB_PORT=5432
+ECAFRICA_DB_NAME=ECareAfrica_db
+ECAFRICA_DB_USER=postgres
+ECAFRICA_DB_PASSWORD=your_db_password
+
+# ── JWT ───────────────────────────────────────────────────────────
+JWT_SECRET=your_very_strong_secret_min_32_chars
+JWT_EXPIRES_IN=7d
+
+# ── OTP ───────────────────────────────────────────────────────────
+OTP_EXPIRES_MINUTES=10
+
+# ── Firebase ──────────────────────────────────────────────────────
+FIREBASE_PROJECT_ID=your-firebase-project-id
+FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxx@your-project.iam.gserviceaccount.com
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+FIREBASE_DATABASE_URL=https://your-project-default-rtdb.firebaseio.com
+
+# ── SMS Gateway ───────────────────────────────────────────────────
+SMS_GATEWAY_URL=https://your-sms-provider.com/send
+SMS_GATEWAY_API_KEY=your_sms_api_key
+SMS_SENDER_ID=ECareAfrica
+
+# ── CORS ──────────────────────────────────────────────────────────
+ALLOWED_ORIGINS=http://localhost:3000,https://your-production-domain.com
+```
 
 ### Step 3 — Run database migrations
 
+This creates `chatRoom_history`, `chatroom_active_status`, and `chatroom_device_tokens` in ECareAfrica_db. **No existing tables are altered.**
+
 ```bash
 npm run migrate
+# or directly:
+node src/db/migrate.js
 ```
 
-This creates all 8 tables and indexes in your PostgreSQL database.
+### Step 4 — (Optional) Seed test data
 
-### Step 4 — Start the server
+Adds one teacher (`+250781000001 / Test@1234`) and one parent with a linked student:
 
 ```bash
-# Development (with auto-reload)
+node scripts/seed-ecafrica.js
+```
+
+### Step 5 — Start the server
+
+```bash
+# Development — auto-reload on file changes
 npm run dev
 
 # Production
@@ -329,51 +334,142 @@ npm start
 Server starts on `http://localhost:3000`.  
 Health check: `GET http://localhost:3000/health`
 
+### Available npm scripts
+
+| Script | What it does |
+|--------|-------------|
+| `npm run dev` | Start with nodemon (auto-reload) |
+| `npm start` | Start without auto-reload (production) |
+| `npm run migrate` | Create chatroom tables in ECareAfrica_db |
+| `npm test` | Run Jest test suite |
+
 ---
 
-## 7. PostgreSQL Database — Setup
+## 7. Database Setup
 
-### Create the database and user
+### ECareAfrica_db — tables created by migration
+
+The chatroom adds **3 tables** to the existing ECareAfrica_db. All other tables (users, students, schools, sections, etc.) are read-only from the chatroom's perspective.
+
+#### `chatRoom_history` — the single chat table
+
+One row = one message event. Thread context is embedded on every row so the full history can be queried from this table alone without joins.
 
 ```sql
--- Run as postgres superuser
-CREATE DATABASE netrack_chat;
-CREATE USER chat_user WITH ENCRYPTED PASSWORD 'your_strong_password';
-GRANT ALL PRIVILEGES ON DATABASE netrack_chat TO chat_user;
-\c netrack_chat
-GRANT ALL ON SCHEMA public TO chat_user;
+CREATE TABLE IF NOT EXISTS "chatRoom_history" (
+  id                UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+  school_id         UUID         NOT NULL,
+
+  -- Thread identity (deterministic UUID v5 from participants)
+  thread_id         UUID         NOT NULL,
+  thread_type       VARCHAR(20)  NOT NULL DEFAULT 'direct'   -- 'direct' | 'broadcast'
+  thread_initiator  VARCHAR(20)  NOT NULL,                   -- 'parent' | 'student'
+  teacher_id        UUID         NOT NULL,
+  student_id        UUID         NOT NULL,
+  parent_id         UUID,                                    -- NULL for student-initiated
+
+  -- Sender
+  sender_id         UUID         NOT NULL,
+  sender_role       VARCHAR(20)  NOT NULL,                   -- 'teacher'|'parent'|'student'
+
+  -- Content
+  message_type      VARCHAR(20)  NOT NULL DEFAULT 'text',    -- 'text'|'image'|'document'|'voice'|'system'
+  content           TEXT,
+  media_url         TEXT,
+  media_type        VARCHAR(100),
+  media_size_bytes  BIGINT,
+  original_filename VARCHAR(255),
+
+  -- Broadcast
+  is_broadcast      BOOLEAN      NOT NULL DEFAULT FALSE,
+  broadcast_id      UUID,
+  section_ids       JSONB        DEFAULT '[]',
+  total_recipients  INTEGER      DEFAULT 0,
+
+  -- Lifecycle
+  is_edited         BOOLEAN      NOT NULL DEFAULT FALSE,
+  edited_at         TIMESTAMPTZ,
+  is_deleted        BOOLEAN      NOT NULL DEFAULT FALSE,
+  deleted_at        TIMESTAMPTZ,
+
+  -- Delivery / read receipt
+  recipient_id      UUID,
+  status            VARCHAR(20)  NOT NULL DEFAULT 'sent',    -- 'sent'|'delivered'|'seen'
+  delivered_at      TIMESTAMPTZ,
+  seen_at           TIMESTAMPTZ,
+
+  -- SMS fallback audit
+  sms_status        VARCHAR(20),
+  sms_sent_at       TIMESTAMPTZ,
+  sms_provider_ref  TEXT,
+
+  -- Timestamps
+  sent_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT chk_content_or_media CHECK (
+    content IS NOT NULL OR media_url IS NOT NULL OR message_type = 'system'
+  )
+);
+
+-- Key indexes
+CREATE UNIQUE INDEX idx_crh_thread_anchor ON "chatRoom_history" (thread_id) WHERE message_type = 'system';
+CREATE INDEX idx_crh_thread_sent          ON "chatRoom_history" (thread_id, sent_at DESC);
+CREATE INDEX idx_crh_teacher_school       ON "chatRoom_history" (teacher_id, school_id, sent_at DESC);
+CREATE INDEX idx_crh_parent_school        ON "chatRoom_history" (parent_id, school_id, sent_at DESC);
+CREATE INDEX idx_crh_student_school       ON "chatRoom_history" (student_id, school_id, sent_at DESC);
+CREATE INDEX idx_crh_recipient_status     ON "chatRoom_history" (recipient_id, status) WHERE is_deleted = FALSE AND message_type != 'system';
+CREATE INDEX idx_crh_fts                  ON "chatRoom_history" USING GIN (to_tsvector('english', COALESCE(content, '')));
 ```
 
-### Tables created by migration
+#### `chatroom_active_status` — online presence
 
-| Table | Purpose |
-|-------|---------|
-| `chat_threads` | Every conversation (direct or broadcast) |
-| `chat_messages` | Every message — authoritative store |
-| `chat_message_status` | Per-user delivery/seen status |
-| `chat_broadcasts` | Broadcast events and delivery stats |
-| `chat_active_status` | Online/offline presence (synced from Firebase) |
-| `chat_user_device_tokens` | FCM tokens for push notifications |
-| `chat_user_context_cache` | Cached user-context from main system bridge |
-| `chat_sms_logs` | SMS dispatch audit log |
+One row per user, upserted on every heartbeat call (every 30 s from Flutter).
 
-**Important:** This database has zero foreign keys to the main Netrack database.
-All user data arrives via the API bridge and is cached in `chat_user_context_cache`.
+```sql
+CREATE TABLE IF NOT EXISTS chatroom_active_status (
+  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      UUID        NOT NULL UNIQUE,
+  school_id    UUID        NOT NULL,
+  is_online    BOOLEAN     NOT NULL DEFAULT FALSE,
+  last_seen_at TIMESTAMPTZ,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+#### `chatroom_device_tokens` — FCM push tokens
+
+Stores Android/iOS device tokens for push notification delivery.
+
+```sql
+CREATE TABLE IF NOT EXISTS chatroom_device_tokens (
+  id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         UUID        NOT NULL,
+  school_id       UUID        NOT NULL,
+  user_role       VARCHAR(20) NOT NULL,
+  device_token    TEXT        NOT NULL,
+  device_platform VARCHAR(10) NOT NULL,   -- 'android' | 'ios'
+  is_active       BOOLEAN     NOT NULL DEFAULT TRUE,
+  last_used_at    TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (user_id, device_token)
+);
+```
 
 ---
 
-## 8. Firebase — Setup
+## 8. Firebase Setup
 
-### Step 1 — Create a Firebase project
+### Step 1 — Create Firebase project
 
 1. Go to [console.firebase.google.com](https://console.firebase.google.com)
-2. Create a new project: `netrack-chatroom` (separate from any existing Netrack Firebase project)
-3. Enable **Realtime Database** — start in **locked mode**
-4. Enable **Cloud Messaging** (FCM)
+2. Create project: `ecafrica-chatroom`
+3. Enable **Realtime Database** (locked mode)
+4. Enable **Cloud Messaging**
 
-### Step 2 — Firebase Security Rules
-
-In the Realtime Database console, set these rules:
+### Step 2 — Realtime Database security rules
 
 ```json
 {
@@ -388,293 +484,620 @@ In the Realtime Database console, set these rules:
 }
 ```
 
-This enforces school-level isolation at the Firebase layer.
+### Step 3 — Service account (for backend)
 
-### Step 3 — Service account for backend
-
-1. Firebase Console → Project Settings → Service Accounts
-2. Generate new private key → download JSON
-3. Copy values into your `.env` file
+Firebase Console → Project Settings → Service Accounts → Generate new private key → copy values to `.env`.
 
 ### Step 4 — Flutter Firebase config
 
 ```bash
-# Install FlutterFire CLI
 dart pub global activate flutterfire_cli
-
-# In the test_shell directory
 cd test_shell
-flutterfire configure --project=your-firebase-project-id
+flutterfire configure --project=ecafrica-chatroom
 ```
 
-This generates `lib/firebase_options.dart` with your real values.
-
-### Step 5 — Android google-services.json
-
-Download `google-services.json` from Firebase Console and place it at:
-```
-test_shell/android/app/google-services.json
-```
+Places `firebase_options.dart` in `test_shell/lib/`.  
+Copy `google-services.json` to `test_shell/android/app/`.
 
 ---
 
-## 9. Running the System (Day-to-Day)
+## 9. Running the System
 
-Open **3 terminals**:
+### Start the backend
 
 ```bash
-# Terminal 1 — Chat service backend
 cd chat_service
 npm run dev
-# → Running on http://localhost:3000
+# → ECareAfrica_db connected
+# → ECA Chat Service running on port 3000
+```
 
-# Terminal 2 — Flutter test shell (Android emulator)
+### Run the Flutter test shell
+
+```bash
 cd test_shell
 flutter run
-# → Connects to http://10.0.2.2:3000 (emulator → localhost)
-
-# Terminal 3 — (Optional) Second emulator or physical device
-# For testing two-way messaging between parent and teacher
-flutter run -d <second_device_id>
 ```
 
-**Emulator note:** Android emulator uses `10.0.2.2` to reach your machine's
-`localhost`. iOS simulator uses `localhost` directly. The test shell's
-`main.dart` is pre-configured for Android emulator.
+The test shell connects to `http://10.0.2.2:3000` (Android emulator → localhost).  
+For iOS simulator use `http://localhost:3000`.
+
+### Run end-to-end test (verify DB)
+
+```bash
+cd chat_service
+node scripts/test_chat_history.js
+```
+
+This logs in as the seed teacher, creates a thread, sends a message, and confirms the row exists in `chatRoom_history`.
+
+### Two-device testing
+
+```
+Device 1:  Log in as teacher (+250781000001 / Test@1234)
+Device 2:  Log in as parent  (+250781000002 / Test@1234)
+
+→ Parent initiates chat with teacher
+→ Teacher receives push notification
+→ Teacher replies
+→ Parent sees "seen" status (double blue ticks)
+```
+
+### Student OTP flow
+
+```
+Enter roll number  →  OTP sent to parent phone
+                   →  In dev: OTP printed in chat_service/logs/combined.log
+Enter OTP          →  Student JWT issued, chatroom opens
+```
 
 ---
 
-## 10. Test Shell — Development Workflow
+## 10. API Reference
 
-The test shell is a **throwaway Flutter app** that wraps the chatroom package.
-It never goes to production.
-
-### What it does
-
-1. Shows a list of mock users (parents, teachers, students)
-2. Taps a user → calls `POST /dev/auth/test-token` to get a real JWT
-3. Launches `ChatroomWidget` with that JWT
-4. You can test every screen without needing the real Netrack app
-
-### Testing two-way messaging
-
+All endpoints (except `/auth/*`) require:
 ```
-Emulator 1:  Log in as "Jane Doe (Parent)"
-Emulator 2:  Log in as "David Mugisha (English Teacher)"
-
-→ Parent sends message to David
-→ David receives push notification
-→ David replies
-→ Parent sees double blue ticks (seen status)
+Authorization: Bearer <JWT>
 ```
 
-### Testing student OTP flow
-
-```
-Emulator 1:  Log in as "John Doe (Student)"
-             Enter student ID: s-001
-             → Mock SMS logged in terminal (USE_MOCK_BRIDGE=true)
-             Enter OTP shown in terminal
-             → Student JWT issued, chatroom opens
-```
-
-### Mock data
-
-All mock user context is in `chat_service/mock-data/`. Edit these JSON files
-to add more test users, classes, or teachers without touching any real database.
+The JWT is issued by `/auth/verify-otp` or `/auth/student/verify-otp`.  
+JWT payload: `{ sub, user_id, school_id, role, name }`
 
 ---
 
-## 11. Integrating into the Main Netrack App
+### Auth — `/auth`
 
-When the main Flutter app is ready, integration takes about **30 minutes**.
+#### `POST /auth/login`
+Validate phone + password, send OTP to the user's registered phone number.
 
-### What the main team needs to do
-
-**1. Add to pubspec.yaml**
-```yaml
-dependencies:
-  netrack_chatroom:
-    path: ../chatroom_package
+**Request body:**
+```json
+{ "phone": "+250781000001", "password": "Test@1234" }
+```
+**Response `200`:**
+```json
+{ "success": true, "message": "OTP sent to your registered phone number." }
 ```
 
-**2. Initialize in main.dart** (see Section 5, Step 3)
+---
 
-**3. Add the chatroom entry point** (see Section 5, Step 4)
+#### `POST /auth/verify-otp`
+Verify OTP, receive JWT.
 
-**4. Agree on JWT field names** — the only real dependency.
+**Request body:**
+```json
+{ "phone": "+250781000001", "otp": "123456" }
+```
+**Response `200`:**
+```json
+{ "token": "<JWT>", "role": "teacher", "name": "Alice Uwimana" }
+```
 
-The chat service expects this JWT payload:
+---
+
+#### `POST /auth/student/request-otp`
+Lookup student by roll number, send OTP to parent's phone.
+
+**Request body:**
+```json
+{ "student_id": "S2024001" }
+```
+**Response `200`:**
+```json
+{ "success": true, "message": "OTP sent to parent phone." }
+```
+
+---
+
+#### `POST /auth/student/verify-otp`
+Verify student OTP, receive student JWT.
+
+**Request body:**
+```json
+{ "student_id": "S2024001", "otp": "654321" }
+```
+**Response `200`:**
+```json
+{ "token": "<JWT>", "role": "student", "name": "Bob Niyonzima" }
+```
+
+---
+
+### User Context — `/chat`
+
+#### `GET /chat/me`
+Returns the full resolved user context for the authenticated user. Called by the splash screen on every login.
+
+**Response `200`:**
 ```json
 {
-  "sub": "user-uuid",
-  "user_id": "user-uuid",
-  "school_id": "school-uuid",
-  "role": "parent",
-  "exp": 1234567890
+  "data": {
+    "user_id": "uuid",
+    "school_id": "1",
+    "role": "teacher",
+    "full_name": "Alice Uwimana",
+    "students": [
+      {
+        "student_id": "uuid",
+        "full_name": "Bob Niyonzima",
+        "admission_number": "S2024001",
+        "section_id": "3",
+        "section": "Senior 1 A",
+        "parent_name": "Jean Mugisha",
+        "parent_phone": "+2507812xxxxx",
+        "parent_user_id": "uuid",
+        "subjects": ["Mathematics", "Physics"]
+      }
+    ],
+    "subjects": ["Mathematics", "Physics"],
+    "classes": [
+      { "class_id": "3", "class_name": "Senior 1 A", "section": "Senior 1 A" }
+    ]
+  }
 }
 ```
 
-If the main app uses different field names (e.g. `userId` instead of `sub`),
-update `auth.middleware.js` to match before integration.
-
-### What the main Netrack backend team needs to build
-
-One endpoint:
-
-```
-GET /api/internal/user-context
-Headers:
-  Authorization: Bearer {user_jwt}
-  X-Chat-Service-Key: {shared_secret}
-```
-
-Response format is documented in PRD Section 9.3. The chat service calls this
-once per session and caches the result for 30 minutes.
+For **parent**: returns `{ user_id, school_id, role, full_name, children: [...] }`  
+For **student**: returns `{ user_id, school_id, role, full_name, teachers: [...] }`
 
 ---
 
-## 12. API Reference
+#### `GET /chat/children` *(parent only)*
+Returns the authenticated parent's children list.
 
-All endpoints require `Authorization: Bearer {JWT}` except student OTP routes.
+**Response `200`:**
+```json
+{ "data": [{ "student_id": "uuid", "full_name": "Bob", "teachers": [...] }] }
+```
 
-### Authentication
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/auth/student/request-otp` | Send OTP to parent phone |
-| POST | `/auth/student/verify-otp` | Verify OTP, get student JWT |
-| POST | `/dev/auth/test-token` | **Dev only** — get test JWT |
+---
 
-### Threads & Messages
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/chat/threads` | Get all threads for current user |
-| POST | `/chat/threads` | Create or return existing thread |
-| GET | `/chat/threads/:id/messages` | Load messages (paginated) |
-| POST | `/chat/messages` | Send a message |
-| PUT | `/chat/messages/:id` | Edit message (5-min window) |
-| PUT | `/chat/messages/:id/read` | Mark as seen |
+#### `GET /chat/teachers?student_id=<uuid>` *(parent only)*
+Returns teachers for a specific child (filtered by enrolled subjects).
 
-### Broadcast (Teacher only)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/chat/broadcast` | Send class broadcast |
-| GET | `/chat/broadcast/:id` | Get broadcast delivery stats |
+**Response `200`:**
+```json
+{ "data": [{ "user_id": "uuid", "full_name": "Alice Uwimana", "subject": "Mathematics" }] }
+```
 
-### Search
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/chat/search?q=&scope=global` | Global search |
-| GET | `/chat/search?q=&thread_id=` | In-thread search |
-| GET | `/students/search?roll_number=` | Roll number search (teacher) |
+---
 
-### Presence & Status
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| PUT | `/chat/status/heartbeat` | Update online status (every 30s) |
-| GET | `/chat/status/:userId` | Get user online status |
+#### `GET /chat/student/teachers` *(student only)*
+Returns teachers for the authenticated student.
+
+**Response `200`:**
+```json
+{ "data": [{ "user_id": "uuid", "full_name": "Alice Uwimana", "subject": "Mathematics" }] }
+```
+
+---
+
+### Threads — `/chat`
+
+#### `GET /chat/threads`
+Returns all chat threads for the authenticated user, ordered by most recent message. Each thread includes a last-message preview and unread count.
+
+**Response `200`:**
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "thread_id": "uuid",
+      "thread_type": "direct",
+      "thread_initiator": "parent",
+      "teacher_id": "uuid",
+      "student_id": "uuid",
+      "parent_id": "uuid",
+      "school_id": "uuid",
+      "last_message_preview": "Hello, how is Bob doing?",
+      "last_message_type": "text",
+      "last_message_at": "2026-07-05T20:18:51.533Z",
+      "unread_count": 2,
+      "display_name": "Alice Uwimana — Mathematics Teacher",
+      "subject_label": "Mathematics"
+    }
+  ]
+}
+```
+
+---
+
+#### `POST /chat/threads`
+Create a new thread (idempotent — same participants always return the same thread).
+
+**Request body:**
+```json
+{
+  "teacher_id": "uuid",
+  "student_id": "uuid",
+  "parent_id": "uuid",
+  "thread_initiator": "parent",
+  "thread_type": "direct"
+}
+```
+**Response `200`:**
+```json
+{
+  "data": {
+    "id": "uuid",
+    "thread_id": "uuid",
+    "thread_type": "direct",
+    "thread_initiator": "parent",
+    "teacher_id": "uuid",
+    "student_id": "uuid",
+    "parent_id": "uuid",
+    "school_id": "uuid",
+    "display_name": "Alice Uwimana — Mathematics Teacher"
+  }
+}
+```
+
+---
+
+#### `GET /chat/threads/:threadId/messages?page=1&limit=30`
+Load messages for a thread (paginated, oldest first).
+
+**Response `200`:**
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "thread_id": "uuid",
+      "sender_id": "uuid",
+      "sender_role": "teacher",
+      "message_type": "text",
+      "content": "Hello, how is Bob doing?",
+      "status": "seen",
+      "is_edited": false,
+      "is_deleted": false,
+      "sent_at": "2026-07-05T20:18:51.533Z"
+    }
+  ],
+  "page": 1,
+  "limit": 30
+}
+```
+
+---
+
+#### `PUT /chat/threads/:threadId/mute`
+Mute notifications for a thread.
+
+**Response `200`:** `{ "success": true }`
+
+---
+
+### Messages — `/chat`
+
+#### `POST /chat/messages`
+Send a message. The `thread_id` must already exist (create it first with `POST /chat/threads`).
+
+**Request body:**
+```json
+{
+  "thread_id": "uuid",
+  "message_type": "text",
+  "content": "Hello!"
+}
+```
+For media messages, omit `content` and include:
+```json
+{
+  "thread_id": "uuid",
+  "message_type": "image",
+  "media_url": "uploads/school-uuid/image.jpg",
+  "media_type": "image/jpeg",
+  "media_size_bytes": 204800,
+  "original_filename": "photo.jpg"
+}
+```
+**Response `201`:** Full `chatRoom_history` row including `id`, `status: "sent"`, `sent_at`.
+
+---
+
+#### `PUT /chat/messages/:messageId`
+Edit a message. Only the sender can edit; only within 5 minutes of sending; only `text` type.
+
+**Request body:**
+```json
+{ "content": "Updated message text" }
+```
+**Response `200`:** Updated `chatRoom_history` row with `is_edited: true`.
+
+---
+
+#### `PUT /chat/messages/:messageId/read`
+Mark a message as seen (updates `status → 'seen'` and `seen_at`).
+
+**Response `200`:** `{ "success": true }`
+
+---
+
+### Broadcast — `/chat` *(teacher only)*
+
+#### `POST /chat/broadcast`
+Send a broadcast message to all parents of students in the given class sections.
+
+**Request body:**
+```json
+{
+  "class_ids": ["3", "4"],
+  "message_type": "text",
+  "content": "Reminder: Parent-teacher meeting on Friday at 2pm."
+}
+```
+**Response `202`:**
+```json
+{
+  "data": {
+    "broadcast_id": "uuid",
+    "total_parents": 18,
+    "sent": 18
+  },
+  "message": "Broadcast sent."
+}
+```
+
+---
+
+#### `GET /chat/broadcast/:broadcastId` *(teacher only)*
+Get delivery stats for a broadcast.
+
+**Response `200`:**
+```json
+{
+  "data": {
+    "broadcast_id": "uuid",
+    "section_ids": ["3", "4"],
+    "total_recipients": 18,
+    "sent_count": 18,
+    "content": "Reminder: Parent-teacher meeting on Friday at 2pm.",
+    "sent_at": "2026-07-05T20:18:51.533Z"
+  }
+}
+```
+
+---
+
+### Search — `/chat`
+
+#### `GET /chat/search?q=<query>&scope=global`
+Full-text search across all threads the user participates in.
+
+#### `GET /chat/search?q=<query>&thread_id=<uuid>`
+Full-text search within a specific thread.
+
+**Response `200`:**
+```json
+{ "data": [ /* matching chatRoom_history rows */ ] }
+```
+
+---
+
+### Student Search — `/students`
+
+#### `GET /students/search?roll_number=<value>` *(teacher only)*
+Search for a student by roll/enrollment number.
+
+**Response `200`:**
+```json
+{
+  "data": {
+    "student_id": "uuid",
+    "full_name": "Bob Niyonzima",
+    "student_id_number": "S2024001",
+    "section": "Senior 1 A",
+    "parent_name": "Jean Mugisha",
+    "parent_user_id": "uuid"
+  }
+}
+```
+
+---
+
+### Presence — `/chat`
+
+#### `PUT /chat/status/heartbeat`
+Update the authenticated user's online status. Flutter calls this every 30 seconds.
+
+**Response `200`:** `{ "success": true }`
+
+---
+
+#### `GET /chat/status/:userId`
+Get online/offline status for any user in the same school.
+
+**Response `200`:**
+```json
+{ "data": { "is_online": true, "last_seen_at": "2026-07-05T20:18:51.533Z" } }
+```
+
+---
+
+### Settings & Misc — `/chat`
+
+#### `PUT /chat/settings/mute-all`
+Mute all notifications (stub — returns success).
+
+**Response `200`:** `{ "success": true }`
+
+---
+
+#### `GET /chat/unread-count`
+Total unread message count for the authenticated user across all threads.
+
+**Response `200`:**
+```json
+{ "data": { "unread_count": 5 } }
+```
+
+---
+
+#### `POST /chat/device-token`
+Register or refresh an FCM device token. Called by Flutter on session start.
+
+**Request body:**
+```json
+{ "device_token": "fcm-token-string", "device_platform": "android" }
+```
+**Response `200`:** `{ "success": true }`
+
+---
+
+#### `GET /health`
+Health check (no auth required).
+
+**Response `200`:**
+```json
+{ "status": "ok", "service": "eca-chat-service", "version": "1.0.0" }
+```
+
+---
 
 ### Error codes
+
 | Code | HTTP | Meaning |
 |------|------|---------|
-| `UNAUTHORIZED` | 401 | JWT missing or expired |
-| `FORBIDDEN` | 403 | Wrong school_id or role |
-| `THREAD_NOT_FOUND` | 404 | Thread does not exist |
-| `STUDENT_NOT_FOUND` | 404 | Student ID not in database |
-| `PARENT_PHONE_MISSING` | 404 | Student found but no parent phone |
+| `INVALID_REQUEST` | 400 | Missing or invalid fields |
+| `UNAUTHORIZED` | 401 | JWT missing, expired, or invalid |
 | `OTP_INVALID` | 401 | Wrong or expired OTP |
-| `EDIT_WINDOW_EXPIRED` | 422 | 5-minute edit window passed |
-| `RATE_LIMITED` | 429 | Too many requests |
+| `INVALID_CREDENTIALS` | 401 | Wrong phone or password |
+| `FORBIDDEN` | 403 | Wrong school_id, role, or not a thread participant |
+| `STUDENT_NOT_FOUND` | 404 | Roll number not found or no primary parent |
+| `THREAD_NOT_FOUND` | 404 | thread_id not in chatRoom_history |
+| `NOT_FOUND` | 404 | Resource not found |
+| `EDIT_WINDOW_EXPIRED` | 422 | 5-minute edit window has passed |
+| `RATE_LIMITED` | 429 | Too many requests (200 req / 15 min) |
+| `SERVER_ERROR` | 500 | Unhandled error — check server logs |
 
 ---
 
-## 13. Feature Checklist
+## 11. Database Schema
 
-### Parent
-- [x] Single child → direct to teacher list
-- [x] Multiple children → child selection screen
+### How thread IDs work
+
+Thread IDs are computed deterministically using **UUID v5** so that the same two participants always share the same thread — no duplicate conversations are possible.
+
+```js
+const key = [schoolId, teacherId, studentId, initiator, parentId || ''].join(':');
+const threadId = uuidv5(key, THREAD_NS);
+```
+
+A `message_type = 'system'` row is the thread anchor. The unique index `idx_crh_thread_anchor` ensures only one anchor exists per thread, making thread creation idempotent.
+
+### How messages are stored
+
+Every sent message = one row in `chatRoom_history` with:
+- All thread context columns filled (teacher_id, student_id, parent_id, school_id)
+- `sender_id` / `sender_role` identifying who sent it
+- `recipient_id` identifying who should receive it
+- `status = 'sent'` on insert; updated to `'delivered'` / `'seen'` by Flutter
+
+### Tables NOT touched by the chatroom
+
+The chatroom reads (SELECT only) from: `users`, `students`, `schools`, `sections`, `subjects`, `parents_guardians`, `student_parent_links`, `student_section_enrollments`, `teacher_section_subjects`.
+
+---
+
+## 12. Feature Checklist
+
+### Authentication
+- [x] Teacher/parent: phone + password → OTP SMS → JWT
+- [x] Student: roll number → OTP to parent phone → JWT
+- [x] Logout from all screens (Teacher, Parent, Student home + ChildSelection)
+- [x] Back navigation from StudentLoginScreen
+
+### Teacher portal
+- [x] Teacher name displayed in AppBar
+- [x] Thread list with student/parent display names
+- [x] Parent Threads / Student Threads tabs
+- [x] Roll number search with student details
+- [x] New message FAB (contact picker)
+- [x] Class broadcast to multiple sections
+- [x] Broadcast delivery stats
+
+### Parent portal
+- [x] Child selection screen (with logout)
 - [x] Teacher list filtered by child's enrolled subjects
-- [x] Teacher cards with online status dot
+- [x] Online status dot on teacher cards
 - [x] 1-on-1 chat thread
-- [x] Message states: sending → sent → delivered → seen (ticks)
-- [x] Broadcast messages labeled with 📢
-- [x] Offline queue with auto-retry
-- [x] No phone numbers shown anywhere
-- [x] No call button anywhere
 
-### Teacher
-- [x] Roll number search with live suggestions
-- [x] Parent + student contact cards per student
-- [x] Separate Parent Threads / Student Threads tabs
-- [x] Class broadcast with class selector
-- [x] Broadcast confirmation dialog
-- [x] Broadcast success screen with delivery info
-- [x] New Broadcast FAB
-
-### Student
-- [x] Student ID / Enrollment Number login
-- [x] OTP sent to parent's phone
-- [x] 6-digit OTP input with auto-advance
-- [x] Student JWT with role=student
+### Student portal
+- [x] Student ID entry with back arrow
+- [x] 6-digit OTP input (auto-advance, paste support)
 - [x] Teacher list filtered by enrolled subjects
-- [x] Cannot see parent-teacher threads (403 enforced at API)
-- [x] Cannot message other students
+- [x] Cannot see or join parent-teacher threads (403 enforced)
+
+### Messaging
+- [x] Text messages
+- [x] Message status: sent → delivered → seen
+- [x] 5-minute edit window for text messages
+- [x] No message deletion (policy — no DELETE endpoint)
+- [x] Full-text search (GIN index on content)
 
 ### System
+- [x] Single database: ECareAfrica_db
+- [x] Single chat table: chatRoom_history
 - [x] Firebase real-time event signals
-- [x] Heartbeat presence (30s interval)
-- [x] Online/offline dot on all contact cards
-- [x] Typing indicator (Firebase)
+- [x] Heartbeat presence (30 s interval)
 - [x] FCM push notifications
-- [x] SMS always-on delivery
-- [x] 5-minute message edit window
-- [x] No message deletion (policy enforced — no DELETE endpoint)
+- [x] SMS OTP delivery
 - [x] school_id isolation on every query
-- [x] User-context cache (30-min TTL)
-- [x] Mock bridge for development
-- [x] Dev test-token endpoint (dev only)
-- [x] All 8 PostgreSQL tables with indexes
-- [x] Full-text search index on message content
+- [x] Rate limiting (200 req / 15 min)
+- [x] Helmet security headers
 
 ---
 
-## 14. Troubleshooting
+## 13. Troubleshooting
 
-### Flutter: "Could not find package netrack_chatroom"
-Run `flutter pub get` in both `chatroom_package/` and `test_shell/`.
-
-### Flutter: Firebase initialization error
-Make sure `google-services.json` is in `test_shell/android/app/` and
-`firebase_options.dart` has your real project values (run `flutterfire configure`).
-
-### Backend: "JWT_SECRET is not defined"
-Copy `.env.example` to `.env` and fill in all values. Never commit `.env`.
-
-### Backend: PostgreSQL connection refused
-Check that PostgreSQL is running: `pg_isready -h localhost -p 5432`  
-Verify `DB_USER` and `DB_PASSWORD` match what you created in Step 7.
-
-### Backend: "relation chat_threads does not exist"
-Run migrations: `npm run migrate`
-
-### Emulator: Cannot reach localhost backend
-Use `10.0.2.2` (not `localhost`) in the Flutter app when running on Android
-emulator. The test shell's `main.dart` is already configured for this.
-
-### SMS not sending in development
-Set `USE_MOCK_BRIDGE=true` in `.env`. Mock SMS messages are printed to the
-terminal instead of being sent to a real gateway.
-
-### Messages not appearing in real-time
-Check Firebase Realtime Database rules — the user's `school_id` in the JWT
-must match the path they are reading/writing. See Section 8, Step 2.
+### `INVALID_CREDENTIALS` on login
+Check the phone number format (must include country code: `+250...`). Password is case-sensitive.
 
 ### OTP not received
-In development with `USE_MOCK_BRIDGE=true`, the OTP is printed to the
-Node.js terminal — check Terminal 1. In production, verify SMS gateway
-credentials and credit balance.
+In development the OTP is printed to `chat_service/logs/combined.log` — search for `[DEV] OTP for`. In production verify SMS gateway credentials and credit balance.
+
+### `THREAD_NOT_FOUND` when sending a message
+Call `POST /chat/threads` first to get a `thread_id`, then use it in `POST /chat/messages`.
+
+### `relation "chatRoom_history" does not exist`
+Run migrations: `node src/db/migrate.js`
+
+### PostgreSQL connection refused
+Check that PostgreSQL is running: `pg_isready -h localhost -p 5432`  
+Verify `ECAFRICA_DB_*` variables in `.env` match your database credentials.
+
+### Emulator cannot reach backend
+Android emulator uses `10.0.2.2` (not `localhost`) to reach your machine. iOS simulator uses `localhost` directly. Update `apiBaseUrl` in `ChatroomService.initialize()` accordingly.
+
+### Firebase `auth/invalid-credential`
+Verify `FIREBASE_PRIVATE_KEY` in `.env` — the `\n` newlines must be real newlines or escaped as `\n`. Generate a new service account key if in doubt.
+
+### `sec.uuid does not exist` error
+This was a bug (now fixed) where `sections.uuid` was referenced but the table only has an integer `id`. Fixed in `user_context.service.js`: uses `sec.id::text AS section_id`.
 
 ---
 
-*Netrack Education ERP — Chatroom Feature v1.0.0*  
-*Education Care Africa — Building Africa's Digital Education Future*
+*ECareAfrica Chatroom — v1.1.0*  
+*Building Africa's Digital Education Future*

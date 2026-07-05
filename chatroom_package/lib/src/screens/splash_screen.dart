@@ -97,7 +97,7 @@ class _SplashScreenState extends State<SplashScreen> {
                   borderRadius: BorderRadius.circular(32),
                   boxShadow: [
                     BoxShadow(
-                      color: AppColors.primaryDark.withOpacity(0.45),
+                      color: AppColors.primaryDark.withValues(alpha:0.45),
                       blurRadius: 40,
                       spreadRadius: 6,
                       offset: const Offset(0, 12),
@@ -132,7 +132,7 @@ class _SplashScreenState extends State<SplashScreen> {
 
               // App name
               const Text(
-                'Education Care Africa',
+                'ECareAfrica',
                 style: TextStyle(
                   color: AppColors.white,
                   fontSize: 24,
@@ -166,7 +166,7 @@ class _SplashScreenState extends State<SplashScreen> {
               SizedBox(
                 width: 200,
                 child: LinearProgressIndicator(
-                  backgroundColor: AppColors.white.withOpacity(0.2),
+                  backgroundColor: AppColors.white.withValues(alpha:0.2),
                   valueColor: const AlwaysStoppedAnimation<Color>(
                     AppColors.accent,
                   ),
@@ -180,7 +180,7 @@ class _SplashScreenState extends State<SplashScreen> {
               Text(
                 _statusText,
                 style: TextStyle(
-                  color: AppColors.white.withOpacity(0.7),
+                  color: AppColors.white.withValues(alpha:0.7),
                   fontSize: 13,
                   letterSpacing: 0.3,
                 ),
@@ -191,7 +191,7 @@ class _SplashScreenState extends State<SplashScreen> {
               Text(
                 'Building Africa\'s Digital Education Future',
                 style: TextStyle(
-                  color: AppColors.white.withOpacity(0.5),
+                  color: AppColors.white.withValues(alpha:0.5),
                   fontSize: 11,
                   letterSpacing: 0.3,
                 ),

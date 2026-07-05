@@ -10,6 +10,7 @@ import '../../widgets/common/thread_list_tile.dart';
 import '../../widgets/common/shimmer_list.dart';
 import '../../widgets/common/empty_state.dart';
 import '../../widgets/common/error_state.dart';
+import '../auth/teacher_parent_login_screen.dart';
 import '../chat_thread_screen.dart';
 import 'child_selection_screen.dart';
 
@@ -36,6 +37,16 @@ class _ParentHomeScreenState extends State<ParentHomeScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ThreadsProvider>().loadThreads();
     });
+  }
+
+  Future<void> _logout() async {
+    await AuthService.instance.clearSession();
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const TeacherParentLoginScreen()),
+      (_) => false,
+    );
   }
 
   @override
@@ -67,7 +78,7 @@ class _ParentHomeScreenState extends State<ParentHomeScreen>
       elevation: 0,
       title: Row(
         children: [
-          // Education Care Africa logo
+          // ECareAfrica logo
           Container(
             width: 36,
             height: 36,
@@ -101,7 +112,7 @@ class _ParentHomeScreenState extends State<ParentHomeScreen>
               if (ctx != null)
                 Text(ctx.fullName,
                     style: TextStyle(
-                        color: AppColors.white.withOpacity(0.75), fontSize: 11)),
+                        color: AppColors.white.withValues(alpha:0.75), fontSize: 11)),
             ],
           ),
         ],
@@ -129,6 +140,11 @@ class _ParentHomeScreenState extends State<ParentHomeScreen>
           icon: const Icon(Icons.refresh_rounded, color: AppColors.white),
           onPressed: () => context.read<ThreadsProvider>().loadThreads(),
         ),
+        IconButton(
+          icon: const Icon(Icons.logout_rounded, color: AppColors.white),
+          tooltip: 'Logout',
+          onPressed: _logout,
+        ),
       ],
     );
   }
@@ -143,11 +159,11 @@ class _ParentHomeScreenState extends State<ParentHomeScreen>
         style: const TextStyle(color: AppColors.white),
         decoration: InputDecoration(
           hintText: 'Search conversations…',
-          hintStyle: TextStyle(color: AppColors.white.withOpacity(0.5)),
+          hintStyle: TextStyle(color: AppColors.white.withValues(alpha:0.5)),
           prefixIcon:
-              Icon(Icons.search, color: AppColors.white.withOpacity(0.7)),
+              Icon(Icons.search, color: AppColors.white.withValues(alpha:0.7)),
           filled: true,
-          fillColor: AppColors.white.withOpacity(0.12),
+          fillColor: AppColors.white.withValues(alpha:0.12),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
             borderSide: BorderSide.none,
