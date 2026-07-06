@@ -293,9 +293,9 @@ FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxx@your-project.iam.gserviceaccount.com
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 FIREBASE_DATABASE_URL=https://your-project-default-rtdb.firebaseio.com
 
-# ── SMS Gateway ───────────────────────────────────────────────────
-SMS_GATEWAY_URL=https://your-sms-provider.com/send
-SMS_GATEWAY_API_KEY=your_sms_api_key
+# ── SMS Gateway (eMedia Uganda — http://text.emediauganda.com) ────
+SMS_USER=your_emedia_username
+SMS_PASSWORD=your_emedia_password
 SMS_SENDER_ID=ECareAfrica
 
 # ── CORS ──────────────────────────────────────────────────────────
@@ -1088,7 +1088,7 @@ cd test_shell
 This auto-detects your current WiFi IP and passes it via `--dart-define`. A full restart (not hot reload) is required — hot reload does not re-read `dart-define` values.
 
 ### OTP not received
-In development the OTP is printed to `chat_service/logs/combined.log` — search for `[DEV] OTP for`. In production verify SMS gateway credentials and credit balance.
+In development the OTP is printed to `chat_service/logs/combined.log` — search for `[DEV] Parent OTP for` or `[DEV] OTP for`. In production verify `SMS_USER`, `SMS_PASSWORD`, and `SMS_SENDER_ID` in `.env` and check your eMedia Uganda account balance.
 
 ### `THREAD_NOT_FOUND` when sending a message
 Call `POST /chat/threads` first to get a `thread_id`, then use it in `POST /chat/messages`.
