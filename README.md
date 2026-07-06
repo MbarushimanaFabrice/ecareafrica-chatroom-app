@@ -484,26 +484,24 @@ npm run dev
 
 ### Run the Flutter test shell
 
-**Android emulator** (default — no flag needed):
+The app connects to the remote backend at `http://13.140.133.61:3000` — no local server needed.
+
 ```bash
 cd test_shell
 flutter run
-# defaults to http://10.0.2.2:3000
 ```
 
-**Physical device** — auto-detects your current WiFi IP:
+To target a specific device:
 ```powershell
 cd test_shell
-./run_app.ps1
-# prints "Detected IP: http://192.168.x.x:3000" then launches
+./run_app.ps1 -d <device-id>
 ```
 
-Or pass the URL manually if you know the IP:
-```bash
-flutter run --dart-define=API_URL=http://192.168.8.101:3000
-```
-
-> `API_URL` is read via `String.fromEnvironment('API_URL')` in `main.dart`. The default fallback is `http://10.0.2.2:3000` (emulator). A full restart (not hot reload) is required after changing the URL.
+> To override the backend URL for local development, pass it at run time:
+> ```bash
+> flutter run --dart-define=API_URL=http://192.168.x.x:3000
+> ```
+> A full restart (not hot reload) is required after changing the URL.
 
 ### Run end-to-end test (verify DB)
 
@@ -1080,12 +1078,12 @@ Check the phone number format (must include country code: `+250...`). Password i
 The phone number is not registered as a parent in the `users` table (`role = 'parent'`). Confirm the number with the school admin.
 
 ### "Could not connect" on login
-You are likely on a physical device and the IP has changed (new WiFi). Run the app using the helper script instead of `flutter run`:
-```powershell
-cd test_shell
-./run_app.ps1
-```
-This auto-detects your current WiFi IP and passes it via `--dart-define`. A full restart (not hot reload) is required — hot reload does not re-read `dart-define` values.
+The app points to `http://13.140.133.61:3000`. Check that:
+1. The remote server is running (`GET http://13.140.133.61:3000/health` should return `{"status":"ok"}`)
+2. Your device has internet access
+3. No firewall/VPN is blocking port 3000
+
+For local development, override the URL: `flutter run --dart-define=API_URL=http://192.168.x.x:3000`
 
 ### OTP not received
 In development the OTP is printed to `chat_service/logs/combined.log` — search for `[DEV] Parent OTP for` or `[DEV] OTP for`. In production verify `SMS_USER`, `SMS_PASSWORD`, and `SMS_SENDER_ID` in `.env` and check your eMedia Uganda account balance.
