@@ -37,14 +37,14 @@ The ECareAfrica Chatroom is a **fully independent feature module** that adds rea
 | Real-time | Firebase Realtime Database (event signals only — no message content stored) |
 | Push | Firebase Cloud Messaging (FCM) |
 | SMS | OTP delivery via configured SMS gateway |
-| Auth | OTP-based (phone + password → OTP → JWT) |
+| Auth | Teacher: phone + password → OTP → JWT / Parent: phone only → OTP → JWT |
 
 ### Who uses it
 
 | Role | Login flow | What they can do |
 |------|-----------|-----------------|
 | **Teacher** | Phone + password → OTP SMS → JWT | View threads, chat with parents/students, broadcast to class, roll-number search |
-| **Parent** | Phone + password → OTP SMS → JWT | Select child, chat with child's teachers, receive broadcasts |
+| **Parent** | Phone only → OTP SMS → JWT (no password required) | Select child, chat with child's teachers, receive broadcasts |
 | **Student** | Roll number → OTP to parent's phone → JWT | Chat with their enrolled subject teachers only |
 
 ---
@@ -104,7 +104,8 @@ ChatRoom/
 │   │       │   ├── login_screen.dart           ← Entry: "Who are you?" selector
 │   │       │   ├── chat_thread_screen.dart     ← Message view (all roles)
 │   │       │   ├── auth/
-│   │       │   │   └── teacher_parent_login_screen.dart  ← Phone + password + OTP
+│   │       │   │   ├── teacher_parent_login_screen.dart  ← Teacher/Parent toggle; teacher: phone+password, parent: phone only
+│   │       │   │   └── teacher_parent_otp_screen.dart    ← Shared 6-digit OTP entry (teacher + parent)
 │   │       │   ├── parent/
 │   │       │   │   ├── child_selection_screen.dart
 │   │       │   │   ├── parent_home_screen.dart
@@ -536,8 +537,8 @@ JWT payload: `{ sub, user_id, school_id, role, name }`
 
 ### Auth — `/auth`
 
-#### `POST /auth/login`
-Validate phone + password, send OTP to the user's registered phone number.
+#### `POST /auth/login` *(teacher only)*
+Validate teacher phone + password, send OTP to their registered phone number.
 
 **Request body:**
 ```json
@@ -550,7 +551,22 @@ Validate phone + password, send OTP to the user's registered phone number.
 
 ---
 
-#### `POST /auth/verify-otp`
+#### `POST /auth/parent/request-otp` *(parent only)*
+Look up parent by phone number (no password required), send OTP to their phone.
+
+**Request body:**
+```json
+{ "phone": "+250781000002" }
+```
+**Response `200`:**
+```json
+{ "success": true, "message": "OTP sent to your phone." }
+```
+Returns `404 PARENT_NOT_FOUND` if the phone is not registered as a parent.
+
+---
+
+#### `POST /auth/verify-otp` *(teacher + parent)*
 Verify OTP, receive JWT.
 
 **Request body:**
@@ -952,7 +968,8 @@ Health check (no auth required).
 | `INVALID_REQUEST` | 400 | Missing or invalid fields |
 | `UNAUTHORIZED` | 401 | JWT missing, expired, or invalid |
 | `OTP_INVALID` | 401 | Wrong or expired OTP |
-| `INVALID_CREDENTIALS` | 401 | Wrong phone or password |
+| `INVALID_CREDENTIALS` | 401 | Wrong phone or password (teacher login) |
+| `PARENT_NOT_FOUND` | 404 | Phone not registered as a parent |
 | `FORBIDDEN` | 403 | Wrong school_id, role, or not a thread participant |
 | `STUDENT_NOT_FOUND` | 404 | Roll number not found or no primary parent |
 | `THREAD_NOT_FOUND` | 404 | thread_id not in chatRoom_history |
@@ -993,7 +1010,9 @@ The chatroom reads (SELECT only) from: `users`, `students`, `schools`, `sections
 ## 12. Feature Checklist
 
 ### Authentication
-- [x] Teacher/parent: phone + password → OTP SMS → JWT
+- [x] Teacher: phone + password → OTP SMS → JWT
+- [x] Parent: phone only → OTP SMS → JWT (no password required)
+- [x] Teacher/Parent login screen with animated toggle (switches between the two flows)
 - [x] Student: roll number → OTP to parent phone → JWT
 - [x] Logout from all screens (Teacher, Parent, Student home + ChildSelection)
 - [x] Back navigation from StudentLoginScreen
@@ -1041,8 +1060,14 @@ The chatroom reads (SELECT only) from: `users`, `students`, `schools`, `sections
 
 ## 13. Troubleshooting
 
-### `INVALID_CREDENTIALS` on login
+### `INVALID_CREDENTIALS` on teacher login
 Check the phone number format (must include country code: `+250...`). Password is case-sensitive.
+
+### `PARENT_NOT_FOUND` on parent login
+The phone number is not registered as a parent in the `users` table (`role = 'parent'`). Confirm the number with the school admin.
+
+### "Could not connect" on login
+The `apiBaseUrl` in `test_shell/lib/main.dart` must match your machine's actual local IP (run `ipconfig` on Windows to find it). Update the IP if your network has changed — e.g. `http://192.168.8.101:3000`. A full app restart (not hot reload) is required after changing `main.dart`.
 
 ### OTP not received
 In development the OTP is printed to `chat_service/logs/combined.log` — search for `[DEV] OTP for`. In production verify SMS gateway credentials and credit balance.

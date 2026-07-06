@@ -6,7 +6,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await ChatroomService.initialize(
-    apiBaseUrl: 'http://192.168.8.100:3000',
+    apiBaseUrl: 'http://192.168.8.101:3000',
     firebaseOptions: null,
   );
 
