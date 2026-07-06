@@ -484,13 +484,26 @@ npm run dev
 
 ### Run the Flutter test shell
 
+**Android emulator** (default — no flag needed):
 ```bash
 cd test_shell
 flutter run
+# defaults to http://10.0.2.2:3000
 ```
 
-The test shell connects to `http://10.0.2.2:3000` (Android emulator → localhost).  
-For iOS simulator use `http://localhost:3000`.
+**Physical device** — auto-detects your current WiFi IP:
+```powershell
+cd test_shell
+./run_app.ps1
+# prints "Detected IP: http://192.168.x.x:3000" then launches
+```
+
+Or pass the URL manually if you know the IP:
+```bash
+flutter run --dart-define=API_URL=http://192.168.8.101:3000
+```
+
+> `API_URL` is read via `String.fromEnvironment('API_URL')` in `main.dart`. The default fallback is `http://10.0.2.2:3000` (emulator). A full restart (not hot reload) is required after changing the URL.
 
 ### Run end-to-end test (verify DB)
 
@@ -1067,7 +1080,12 @@ Check the phone number format (must include country code: `+250...`). Password i
 The phone number is not registered as a parent in the `users` table (`role = 'parent'`). Confirm the number with the school admin.
 
 ### "Could not connect" on login
-The `apiBaseUrl` in `test_shell/lib/main.dart` must match your machine's actual local IP (run `ipconfig` on Windows to find it). Update the IP if your network has changed — e.g. `http://192.168.8.101:3000`. A full app restart (not hot reload) is required after changing `main.dart`.
+You are likely on a physical device and the IP has changed (new WiFi). Run the app using the helper script instead of `flutter run`:
+```powershell
+cd test_shell
+./run_app.ps1
+```
+This auto-detects your current WiFi IP and passes it via `--dart-define`. A full restart (not hot reload) is required — hot reload does not re-read `dart-define` values.
 
 ### OTP not received
 In development the OTP is printed to `chat_service/logs/combined.log` — search for `[DEV] OTP for`. In production verify SMS gateway credentials and credit balance.
