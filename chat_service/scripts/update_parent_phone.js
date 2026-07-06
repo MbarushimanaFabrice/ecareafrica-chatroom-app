@@ -12,14 +12,14 @@ const pool = new Pool({
 
 async function run() {
   const r1 = await pool.query(
-    `UPDATE users SET phone = '0773666640', updated_at = NOW()
-     WHERE phone = '+250781000002' AND role = 'parent'`
+    `UPDATE users SET phone = '+256773666640', updated_at = NOW()
+     WHERE phone = '0773666640' AND role = 'parent'`
   );
   console.log('users updated:', r1.rowCount, 'row(s)');
 
   const r2 = await pool.query(
-    `UPDATE parents_guardians SET phone = '0773666640', updated_at = NOW()
-     WHERE phone = '+250781000002'`
+    `UPDATE parents_guardians SET phone = '+256773666640', updated_at = NOW()
+     WHERE phone = '0773666640'`
   );
   console.log('parents_guardians updated:', r2.rowCount, 'row(s)');
 
