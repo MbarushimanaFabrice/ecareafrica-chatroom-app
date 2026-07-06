@@ -243,4 +243,65 @@ async function verifyStudentOtp(req, res) {
   }
 }
 
-module.exports = { login, verifyOtp, requestStudentOtp, verifyStudentOtp };
+// ── POST /auth/parent/request-otp ────────────────────────────────────────────
+async function parentRequestOtp(req, res) {
+  try {
+    const { phone } = req.body;
+    if (!phone) {
+      return res.status(400).json({
+        error: 'INVALID_REQUEST',
+        message: 'phone is required.',
+      });
+    }
+
+    const result = await queryEca(
+      `SELECT u.id, u.uuid, u.school_id, u.name, u.phone, u.role, u.status,
+              s.uuid AS school_uuid
+       FROM   users u
+       JOIN   schools s ON s.id = u.school_id
+       WHERE  u.phone = $1
+         AND  u.role = 'parent'
+         AND  u.deleted_at IS NULL
+       LIMIT 1`,
+      [phone.trim()]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: 'PARENT_NOT_FOUND',
+        message: 'Phone number not registered as a parent.',
+      });
+    }
+
+    const user = result.rows[0];
+
+    if (user.status !== 'active') {
+      return res.status(401).json({
+        error: 'ACCOUNT_INACTIVE',
+        message: 'Your account is inactive. Contact your school admin.',
+      });
+    }
+
+    const otp = generateOtp();
+    storeOtp(phone.trim(), { otp, user });
+
+    if (process.env.NODE_ENV !== 'production') {
+      logger.info(`[DEV] Parent OTP for ${phone}: ${otp}`);
+    }
+
+    const smsBody = `Your ECA Chatroom OTP is: ${otp}. Valid for ${process.env.OTP_EXPIRES_MINUTES || 10} minutes.`;
+    try {
+      await sendSmsRaw(user.phone, smsBody);
+      logger.info(`OTP sent to parent ${user.uuid} (${phone.slice(0, 6)}****)`);
+    } catch (smsErr) {
+      logger.warn(`SMS delivery failed for ${phone.slice(0, 6)}****: ${smsErr.message}`);
+    }
+
+    res.json({ success: true, message: 'OTP sent to your phone.' });
+  } catch (err) {
+    logger.error('parentRequestOtp error:', err);
+    res.status(500).json({ error: 'SERVER_ERROR' });
+  }
+}
+
+module.exports = { login, verifyOtp, parentRequestOtp, requestStudentOtp, verifyStudentOtp };

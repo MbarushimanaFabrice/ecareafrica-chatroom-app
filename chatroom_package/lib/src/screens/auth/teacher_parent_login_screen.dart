@@ -16,6 +16,7 @@ class TeacherParentLoginScreen extends StatefulWidget {
 class _TeacherParentLoginScreenState extends State<TeacherParentLoginScreen> {
   final _phoneController    = TextEditingController();
   final _passwordController = TextEditingController();
+  bool _isParent     = false;   // false = teacher tab, true = parent tab
   bool _loading      = false;
   bool _showPassword = false;
   String? _error;
@@ -27,19 +28,28 @@ class _TeacherParentLoginScreenState extends State<TeacherParentLoginScreen> {
     super.dispose();
   }
 
-  Future<void> _login() async {
+  Future<void> _sendOtp() async {
     final phone    = _phoneController.text.trim();
     final password = _passwordController.text;
 
-    if (phone.isEmpty || password.isEmpty) {
-      setState(() => _error = 'Please enter your phone number and password.');
+    if (phone.isEmpty) {
+      setState(() => _error = 'Please enter your phone number.');
+      return;
+    }
+    if (!_isParent && password.isEmpty) {
+      setState(() => _error = 'Please enter your password.');
       return;
     }
 
     setState(() { _loading = true; _error = null; });
 
     try {
-      await ApiService.login(phone, password);
+      if (_isParent) {
+        await ApiService.parentRequestOtp(phone);
+      } else {
+        await ApiService.login(phone, password);
+      }
+
       if (!mounted) return;
       Navigator.push(
         context,
@@ -50,12 +60,14 @@ class _TeacherParentLoginScreenState extends State<TeacherParentLoginScreen> {
     } catch (e) {
       final msg = e.toString();
       setState(() {
-        if (msg.contains('401') || msg.contains('INVALID_CREDENTIALS')) {
-          _error = 'Incorrect phone number or password.';
+        if (msg.contains('PARENT_NOT_FOUND') || msg.contains('404')) {
+          _error = 'Phone number not registered. Contact your school admin.';
+        } else if (msg.contains('INVALID_CREDENTIALS') || msg.contains('401')) {
+          _error = _isParent
+              ? 'Phone number not registered. Contact your school admin.'
+              : 'Incorrect phone number or password.';
         } else if (msg.contains('ACCOUNT_INACTIVE')) {
           _error = 'Your account is inactive. Contact your school admin.';
-        } else if (msg.contains('404') || msg.contains('not found')) {
-          _error = 'Phone number not registered. Contact your school admin.';
         } else {
           _error = 'Could not connect. Please try again.';
         }
@@ -63,6 +75,15 @@ class _TeacherParentLoginScreenState extends State<TeacherParentLoginScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  void _switchTab(bool toParent) {
+    setState(() {
+      _isParent = toParent;
+      _error = null;
+      _phoneController.clear();
+      _passwordController.clear();
+    });
   }
 
   @override
@@ -138,31 +159,52 @@ class _TeacherParentLoginScreenState extends State<TeacherParentLoginScreen> {
                     color: AppColors.background,
                     borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
                   ),
-                  padding: const EdgeInsets.fromLTRB(28, 32, 28, 24),
+                  padding: const EdgeInsets.fromLTRB(28, 28, 28, 24),
                   child: SingleChildScrollView(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
-                          'LOGIN',
-                          style: TextStyle(
-                            fontSize: 26,
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.primaryDark,
-                            letterSpacing: 1,
+                        // ── Teacher / Parent toggle ───────────────────────
+                        Container(
+                          decoration: BoxDecoration(
+                            color: AppColors.primary.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          padding: const EdgeInsets.all(4),
+                          child: Row(
+                            children: [
+                              _TabButton(
+                                label: 'Teacher',
+                                icon: Icons.school_rounded,
+                                active: !_isParent,
+                                onTap: () => _switchTab(false),
+                              ),
+                              _TabButton(
+                                label: 'Parent',
+                                icon: Icons.family_restroom_rounded,
+                                active: _isParent,
+                                onTap: () => _switchTab(true),
+                              ),
+                            ],
                           ),
                         ),
-                        const SizedBox(height: 4),
-                        const Text(
-                          'Sign in to your school account',
-                          style: TextStyle(
+
+                        const SizedBox(height: 24),
+
+                        // ── Subtitle ──────────────────────────────────────
+                        Text(
+                          _isParent
+                              ? 'Enter your phone number to receive an OTP'
+                              : 'Sign in with your phone and password',
+                          style: const TextStyle(
                             fontSize: 13,
                             color: AppColors.textSecondary,
                           ),
                         ),
-                        const SizedBox(height: 28),
 
-                        // Phone
+                        const SizedBox(height: 20),
+
+                        // ── Phone ─────────────────────────────────────────
                         const Text('Phone Number',
                             style: TextStyle(
                                 fontSize: 13,
@@ -172,7 +214,10 @@ class _TeacherParentLoginScreenState extends State<TeacherParentLoginScreen> {
                         TextField(
                           controller: _phoneController,
                           keyboardType: TextInputType.phone,
-                          textInputAction: TextInputAction.next,
+                          textInputAction: _isParent
+                              ? TextInputAction.done
+                              : TextInputAction.next,
+                          onSubmitted: _isParent ? (_) => _sendOtp() : null,
                           decoration: const InputDecoration(
                             hintText: '+250 7XX XXX XXX',
                             prefixIcon: Icon(Icons.phone_rounded,
@@ -180,40 +225,41 @@ class _TeacherParentLoginScreenState extends State<TeacherParentLoginScreen> {
                           ),
                         ),
 
-                        const SizedBox(height: 18),
-
-                        // Password
-                        const Text('Password',
-                            style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.textPrimary)),
-                        const SizedBox(height: 8),
-                        TextField(
-                          controller: _passwordController,
-                          obscureText: !_showPassword,
-                          textInputAction: TextInputAction.done,
-                          onSubmitted: (_) => _login(),
-                          decoration: InputDecoration(
-                            hintText: 'Enter your password',
-                            prefixIcon: const Icon(Icons.lock_rounded,
-                                color: AppColors.primary),
-                            suffixIcon: IconButton(
-                              icon: Icon(
-                                _showPassword
-                                    ? Icons.visibility_off_rounded
-                                    : Icons.visibility_rounded,
-                                color: AppColors.textHint,
+                        // ── Password (teacher only) ───────────────────────
+                        if (!_isParent) ...[
+                          const SizedBox(height: 18),
+                          const Text('Password',
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textPrimary)),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: _passwordController,
+                            obscureText: !_showPassword,
+                            textInputAction: TextInputAction.done,
+                            onSubmitted: (_) => _sendOtp(),
+                            decoration: InputDecoration(
+                              hintText: 'Enter your password',
+                              prefixIcon: const Icon(Icons.lock_rounded,
+                                  color: AppColors.primary),
+                              suffixIcon: IconButton(
+                                icon: Icon(
+                                  _showPassword
+                                      ? Icons.visibility_off_rounded
+                                      : Icons.visibility_rounded,
+                                  color: AppColors.textHint,
+                                ),
+                                onPressed: () => setState(
+                                    () => _showPassword = !_showPassword),
                               ),
-                              onPressed: () => setState(
-                                  () => _showPassword = !_showPassword),
                             ),
                           ),
-                        ),
+                        ],
 
                         const SizedBox(height: 10),
 
-                        // Student link
+                        // ── Student link ──────────────────────────────────
                         GestureDetector(
                           onTap: () => Navigator.push(
                             context,
@@ -227,8 +273,7 @@ class _TeacherParentLoginScreenState extends State<TeacherParentLoginScreen> {
                               children: [
                                 const TextSpan(
                                   text: 'Are you a student? ',
-                                  style: TextStyle(
-                                      color: AppColors.textSecondary),
+                                  style: TextStyle(color: AppColors.textSecondary),
                                 ),
                                 TextSpan(
                                   text: 'Click here',
@@ -244,7 +289,7 @@ class _TeacherParentLoginScreenState extends State<TeacherParentLoginScreen> {
                           ),
                         ),
 
-                        // Error
+                        // ── Error ─────────────────────────────────────────
                         if (_error != null) ...[
                           const SizedBox(height: 14),
                           Container(
@@ -263,8 +308,7 @@ class _TeacherParentLoginScreenState extends State<TeacherParentLoginScreen> {
                                 Expanded(
                                   child: Text(_error!,
                                       style: const TextStyle(
-                                          color: AppColors.error,
-                                          fontSize: 13)),
+                                          color: AppColors.error, fontSize: 13)),
                                 ),
                               ],
                             ),
@@ -276,18 +320,16 @@ class _TeacherParentLoginScreenState extends State<TeacherParentLoginScreen> {
                         SizedBox(
                           width: double.infinity,
                           child: ElevatedButton(
-                            onPressed: _loading ? null : _login,
+                            onPressed: _loading ? null : _sendOtp,
                             style: ElevatedButton.styleFrom(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 16),
+                              padding: const EdgeInsets.symmetric(vertical: 16),
                             ),
                             child: _loading
                                 ? const SizedBox(
                                     width: 22,
                                     height: 22,
                                     child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: AppColors.white),
+                                        strokeWidth: 2, color: AppColors.white),
                                   )
                                 : const Text('Send OTP',
                                     style: TextStyle(
@@ -300,6 +342,58 @@ class _TeacherParentLoginScreenState extends State<TeacherParentLoginScreen> {
                   ),
                 ),
               ).animate(delay: 150.ms).slideY(begin: 0.06, end: 0).fadeIn(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Teacher / Parent toggle button ────────────────────────────────────────────
+class _TabButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool active;
+  final VoidCallback onTap;
+
+  const _TabButton({
+    required this.label,
+    required this.icon,
+    required this.active,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeInOut,
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: active ? AppColors.primary : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 16,
+                color: active ? Colors.white : AppColors.textSecondary,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: active ? Colors.white : AppColors.textSecondary,
+                ),
+              ),
             ],
           ),
         ),

@@ -139,11 +139,17 @@ class ApiService {
       _dio.post('/chat/device-token',
           data: {'device_token': deviceToken, 'device_platform': platform});
 
-  // ── Teacher / Parent authentication ──────────────────────────────────────
+  // ── Authentication ────────────────────────────────────────────────────────
 
+  // Teacher: phone + password → OTP
   static Future<Response> login(String phone, String password) =>
       _dio.post('/auth/login', data: {'phone': phone, 'password': password});
 
+  // Parent: phone only → OTP (no password required)
+  static Future<Response> parentRequestOtp(String phone) =>
+      _dio.post('/auth/parent/request-otp', data: {'phone': phone});
+
+  // Shared OTP verify for both teacher and parent
   static Future<Response> verifyOtp(String phone, String otp) =>
       _dio.post('/auth/verify-otp', data: {'phone': phone, 'otp': otp});
 }
