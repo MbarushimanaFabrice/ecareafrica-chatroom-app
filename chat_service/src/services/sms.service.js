@@ -1,79 +1,47 @@
-const axios = require('axios');
-const { query } = require('../db/pool');
+'use strict';
+
+const axios  = require('axios');
 const { logger } = require('../utils/logger');
 
 /**
- * Enqueue an SMS for a user (resolves phone from user-context cache).
- * Phone numbers are NEVER stored in the chat DB — resolved at send time only.
+ * Normalize phone for the SMS gateway.
+ * The eMedia API expects local format (e.g. 0773666640), not E.164.
+ * Strip a leading '+' if present; keep everything else as-is.
  */
-async function enqueueSms(recipientUserId, schoolId, messageId, messageText) {
-  try {
-    // Resolve phone from user-context cache
-    const cacheRes = await query(
-      `SELECT context_json FROM chat_user_context_cache
-       WHERE user_id = $1 AND school_id = $2 AND expires_at > NOW()
-       LIMIT 1`,
-      [recipientUserId, schoolId]
-    );
-
-    let phone = null;
-    if (cacheRes.rows.length > 0) {
-      const ctx = cacheRes.rows[0].context_json;
-      phone = ctx.phone || ctx.parent_phone || null;
-    }
-
-    if (!phone) {
-      logger.warn(`No phone found for user ${recipientUserId} — SMS skipped`);
-      return;
-    }
-
-    // Log SMS record (pending)
-    const logRes = await query(
-      `INSERT INTO chat_sms_logs
-         (school_id, message_id, recipient_user_id, status)
-       VALUES ($1, $2, $3, 'pending')
-       RETURNING id`,
-      [schoolId, messageId, recipientUserId]
-    );
-    const logId = logRes.rows[0].id;
-
-    // Send SMS
-    await sendSmsRaw(phone, `New message: ${messageText.slice(0, 100)}. Open Netrack to reply.`);
-
-    // Update log to sent
-    await query(
-      `UPDATE chat_sms_logs SET status = 'sent', sent_at = NOW() WHERE id = $1`,
-      [logId]
-    );
-  } catch (err) {
-    logger.error(`enqueueSms failed for user ${recipientUserId}:`, err);
-  }
+function formatPhone(phone) {
+  return phone.trim().replace(/^\+/, '');
 }
 
 /**
- * Send an SMS directly to a phone number.
- * Phone number is used once and never persisted.
+ * Send an OTP or notification SMS directly to a phone number.
+ * Credentials and sender ID come from environment variables — never hardcoded.
  */
 async function sendSmsRaw(phone, message) {
-  if (process.env.USE_MOCK_BRIDGE === 'true') {
-    logger.info(`[MOCK SMS] To: ${phone.slice(0, 6)}**** | Message: ${message}`);
-    return { success: true, mock: true };
+  const recipient = formatPhone(phone);
+
+  // Always log in dev so tests can read the OTP without a real SIM
+  if (process.env.NODE_ENV !== 'production') {
+    logger.info(`[DEV SMS] To: ${recipient} | ${message}`);
   }
 
   try {
-    const response = await axios.post(
-      process.env.SMS_GATEWAY_URL,
-      { to: phone, message, from: 'Netrack' },
-      {
-        headers: { 'X-API-Key': process.env.SMS_GATEWAY_API_KEY },
-        timeout: 10000,
-      }
-    );
+    const response = await axios.get('http://text.emediauganda.com/api.php', {
+      params: {
+        user:     process.env.SMS_USER,
+        password: process.env.SMS_PASSWORD,
+        sender:   process.env.SMS_SENDER_ID || 'ECareAfrica',
+        message,
+        reciever: recipient,   // note: gateway spells it 'reciever'
+      },
+      timeout: 10000,
+    });
+
+    logger.info(`SMS delivered to ${recipient.slice(0, 6)}**** — gateway: ${JSON.stringify(response.data)}`);
     return { success: true, response: response.data };
   } catch (err) {
-    logger.error(`SMS gateway error for ${phone.slice(0, 6)}****:`, err.message);
+    logger.error(`SMS gateway error for ${recipient.slice(0, 6)}****: ${err.message}`);
     throw err;
   }
 }
 
-module.exports = { enqueueSms, sendSmsRaw };
+module.exports = { sendSmsRaw };

@@ -82,7 +82,8 @@ async function login(req, res) {
       logger.info(`[DEV] OTP for ${phone}: ${otp}`);
     }
 
-    const smsBody = `Your ECA Chatroom OTP is: ${otp}. Valid for ${process.env.OTP_EXPIRES_MINUTES || 10} minutes.`;
+    const mins = process.env.OTP_EXPIRES_MINUTES || 10;
+    const smsBody = `ECareAfrica Login\n\nYour one-time password is: ${otp}\n\nValid for ${mins} minutes. Do not share this code with anyone.`;
     try {
       await sendSmsRaw(user.phone, smsBody);
       logger.info(`OTP sent to ${user.role} ${user.uuid} (${phone.slice(0, 6)}****)`);
@@ -184,7 +185,8 @@ async function requestStudentOtp(req, res) {
       logger.info(`[DEV] Student OTP for ${student_id}: ${otp}`);
     }
 
-    const smsBody = `${student.full_name} is logging into ECA Chatroom. OTP: ${otp}. Valid for ${process.env.OTP_EXPIRES_MINUTES || 10} minutes.`;
+    const mins = process.env.OTP_EXPIRES_MINUTES || 10;
+    const smsBody = `ECareAfrica School\n\n${student.full_name} is logging into ECareAfrica.\n\nOTP: ${otp}\n\nValid for ${mins} minutes. Do not share this code.`;
     try {
       await sendSmsRaw(student.parent_phone, smsBody);
       logger.info(`Student OTP sent for ${student_id} to parent ${student.parent_phone.slice(0, 6)}****`);
@@ -289,7 +291,8 @@ async function parentRequestOtp(req, res) {
       logger.info(`[DEV] Parent OTP for ${phone}: ${otp}`);
     }
 
-    const smsBody = `Your ECA Chatroom OTP is: ${otp}. Valid for ${process.env.OTP_EXPIRES_MINUTES || 10} minutes.`;
+    const mins = process.env.OTP_EXPIRES_MINUTES || 10;
+    const smsBody = `ECareAfrica Login\n\nYour one-time password is: ${otp}\n\nValid for ${mins} minutes. Do not share this code with anyone.`;
     try {
       await sendSmsRaw(user.phone, smsBody);
       logger.info(`OTP sent to parent ${user.uuid} (${phone.slice(0, 6)}****)`);

@@ -175,7 +175,7 @@ async function seed() {
     }
 
     // ── 8. Parent user ────────────────────────────────────────────────────────
-    const parentPhone = '+250781000002';
+    const parentPhone = '0773666640';
     const existingParent = await client.query(
       `SELECT id FROM users WHERE phone = $1`, [parentPhone]
     );
@@ -206,7 +206,7 @@ async function seed() {
               (school_id, user_id, first_name, last_name, phone, relationship, created_at, updated_at)
         VALUES ($1, $2, 'Jean', 'Mugisha', $3, 'Father', NOW(), NOW())
         RETURNING id
-      `, [schoolId, parentUserId, parentPhone]);
+      `, [schoolId, parentUserId, '0773666640']);
       pgId = r.rows[0].id;
       console.log(`✓ parents_guardians id=${pgId}`);
     } else {
@@ -290,7 +290,7 @@ async function seed() {
     console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('Seed complete. Test credentials:');
     console.log('  Teacher  →  phone: +250781000001  password: Test@1234');
-    console.log('  Parent   →  phone: +250781000002  password: Test@1234');
+    console.log('  Parent   →  phone: 0773666640  (no password — OTP only)');
     console.log('  Student  →  roll:  ECA-2025-001');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
   } catch (err) {
